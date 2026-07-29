@@ -1,0 +1,1173 @@
+(function () {
+  "use strict";
+
+  var Api = window.PlezyTVApi;
+  var state = {
+    client: null,
+    screen: "loading",
+    route: "home",
+    libraries: [],
+    libraryItems: [],
+    libraryVisibleCount: 0,
+    items: {},
+    currentDetail: null,
+    currentPlayTarget: null,
+    detailStack: [],
+    pendingServers: [],
+    pinTimer: null,
+    pinStartedAt: 0,
+    toastTimer: null,
+    player: null,
+    lastNavigationAt: 0,
+    lastBackAt: 0,
+    suppressExitUntil: 0
+  };
+
+  function byId(id) { return document.getElementById(id); }
+
+  function all(selector, root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(selector));
+  }
+
+  function escapeHtml(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function closest(element, selector) {
+    while (element && element !== document) {
+      if (element.matches && element.matches(selector)) return element;
+      element = element.parentElement;
+    }
+    return null;
+  }
+
+  function setText(id, value) {
+    var element = byId(id);
+    if (element) element.textContent = value === undefined || value === null ? "" : String(value);
+  }
+
+  function show(element) { if (element) element.classList.remove("hidden"); }
+  function hide(element) { if (element) element.classList.add("hidden"); }
+
+  function focusFirst(root) {
+    setTimeout(function () {
+      var scope = root || document;
+      var target = scope.querySelector('[data-autofocus="true"][data-focusable="true"]:not([disabled])') ||
+        scope.querySelector('[data-focusable="true"]:not([disabled])');
+      if (target) {
+        target.focus();
+        reveal(target);
+      }
+    }, 30);
+  }
+
+  function showScreen(name) {
+    all("section.screen").forEach(function (screen) { screen.classList.add("hidden"); });
+    var screen = byId(name + "-screen");
+    show(screen);
+    state.screen = name;
+    focusFirst(screen);
+  }
+
+  function setLoading(message) {
+    setText("loading-message", message || "Loading…");
+    showScreen("loading");
+  }
+
+  function toast(message, duration) {
+    var element = byId("toast");
+    clearTimeout(state.toastTimer);
+    element.textContent = message;
+    show(element);
+    state.toastTimer = setTimeout(function () { hide(element); }, duration || 4200);
+  }
+
+  function friendlyError(error) {
+    if (!error) return "Something went wrong.";
+    if (error.message === "Failed to fetch") {
+      return "Could not reach the server. Check its address, HTTPS certificate, and network access.";
+    }
+    return error.message || String(error);
+  }
+
+  function providerName() {
+    return state.client && state.client.provider === "jellyfin" ? "Jellyfin" : "Plex";
+  }
+
+  function serverName() {
+    return state.client && state.client.server && state.client.server.name
+      ? state.client.server.name
+      : providerName();
+  }
+
+  function setActiveRoute(route) {
+    state.route = route;
+    all(".nav-item").forEach(function (button) {
+      button.classList.toggle("is-active", button.getAttribute("data-route") === route);
+    });
+  }
+
+  function setPage(title, eyebrow) {
+    setText("page-title", title);
+    setText("page-eyebrow", eyebrow || providerName());
+  }
+
+  function setBody(html) {
+    byId("content-body").innerHTML = html;
+  }
+
+  function bodyLoading(message) {
+    setBody('<div class="empty-state"><div class="spinner"></div><p>' + escapeHtml(message || "Loading…") + "</p></div>");
+  }
+
+  function bodyError(error, retryRoute) {
+    setBody(
+      '<div class="error-state"><h2>Could not load this page</h2><p>' +
+      escapeHtml(friendlyError(error)) +
+      '</p><button class="button" data-focusable="true" data-route="' +
+      escapeHtml(retryRoute || state.route) +
+      '">Try again</button></div>'
+    );
+    focusFirst(byId("content-body"));
+  }
+
+  function itemKey(item) {
+    return String(item.id);
+  }
+
+  function rememberItems(items) {
+    (items || []).forEach(function (item) { state.items[itemKey(item)] = item; });
+  }
+
+  function progressHtml(item) {
+    if (!item.progress) return "";
+    return '<div class="media-progress"><div style="width:' +
+      Math.round(item.progress * 100) + '%"></div></div>';
+  }
+
+  function cardHtml(item, wide, directPlayable, pageAnchor) {
+    var key = itemKey(item);
+    var shouldPlay = item.playable && (directPlayable || item.type === "episode" || item.type === "clip");
+    var art = item.thumb
+      ? '<img src="' + escapeHtml(item.thumb) + '" alt="" decoding="async" loading="lazy">'
+      : '<div class="media-placeholder">▶</div>';
+    return '<button class="media-card' + (wide ? " media-card--wide" : "") +
+      '" data-focusable="true" data-item="' + escapeHtml(key) + '"' +
+      (shouldPlay ? ' data-direct-play="true"' : "") +
+      (pageAnchor === key ? ' data-page-anchor="true"' : "") + '>' +
+      '<div class="media-art">' + art + progressHtml(item) + '</div>' +
+      '<div class="media-copy"><span class="media-title">' + escapeHtml(item.title) +
+      '</span><span class="media-subtitle">' + escapeHtml(item.subtitle || item.type) +
+      "</span></div></button>";
+  }
+
+  function shelfHtml(shelf, options) {
+    options = options || {};
+    var items = options.limit ? shelf.items.slice(0, options.limit) : shelf.items;
+    rememberItems(items);
+    var wide = items.some(function (item) {
+      return item.type === "episode" || item.type === "clip";
+    });
+    return '<section class="shelf"><h2>' + escapeHtml(shelf.title) +
+      '</h2><div class="card-row">' +
+      items.map(function (item) { return cardHtml(item, wide, Boolean(options.directPlayable)); }).join("") +
+      "</div></section>";
+  }
+
+  function gridHtml(items, options) {
+    options = options || {};
+    var visible = options.limit ? items.slice(0, options.limit) : items;
+    rememberItems(visible);
+    if (!items.length) return '<div class="empty-state">Nothing was found.</div>';
+    var more = options.limit && items.length > visible.length
+      ? '<button class="media-card load-more-card" data-focusable="true" data-action="load-more">' +
+        '<div class="media-art"><div class="media-placeholder">+' + Math.min(60, items.length - visible.length) +
+        '</div></div><div class="media-copy"><span class="media-title">Load more</span>' +
+        '<span class="media-subtitle">' + visible.length + ' of ' + items.length + '</span></div></button>'
+      : "";
+    return '<div class="library-grid">' +
+      visible.map(function (item) {
+        return cardHtml(item, false, Boolean(options.directPlayable), options.pageAnchor);
+      }).join("") + more +
+      "</div>";
+  }
+
+  function renderLibraryItems(pageAnchor) {
+    setBody(gridHtml(state.libraryItems, {
+      limit: state.libraryVisibleCount,
+      pageAnchor: pageAnchor
+    }));
+    if (pageAnchor) {
+      var anchor = byId("content-body").querySelector('[data-page-anchor="true"]');
+      if (anchor) {
+        anchor.focus();
+        reveal(anchor);
+        return;
+      }
+    }
+    focusFirst(byId("content-body"));
+  }
+
+  function openBrowse() {
+    state.currentDetail = null;
+    state.currentPlayTarget = null;
+    state.detailStack = [];
+    showScreen("browse");
+    setText("connection-badge", providerName() + " · " + serverName());
+    routeHome();
+  }
+
+  function routeHome() {
+    setActiveRoute("home");
+    setPage("Home", serverName());
+    bodyLoading("Loading your home screen…");
+    state.client.getHome().then(function (shelves) {
+      if (state.route !== "home") return;
+      var visibleShelves = shelves.slice(0, 8);
+      setBody(visibleShelves.length
+        ? visibleShelves.map(function (shelf) {
+          return shelfHtml(shelf, { directPlayable: true, limit: 12 });
+        }).join("")
+        : '<div class="empty-state">Your server did not return any home-screen items.</div>');
+      focusFirst(byId("content-body"));
+    }).catch(function (error) { bodyError(error, "home"); });
+  }
+
+  function ensureCurrentPlexServer() {
+    if (providerName() !== "Plex" || !state.client.server) return;
+    var current = state.client.server;
+    var exists = state.pendingServers.some(function (server) { return server.id === current.id; });
+    if (!exists) {
+      state.pendingServers.push({
+        id: current.id,
+        name: current.name,
+        owned: current.owned,
+        local: current.local,
+        accessToken: state.client.token,
+        baseUrl: state.client.baseUrl
+      });
+    }
+    state.pendingServers = Api.orderPlexServers(state.pendingServers);
+  }
+
+  function plexServerGroupHtml(title, owned) {
+    var choices = [];
+    state.pendingServers.forEach(function (server, index) {
+      if (Boolean(server.owned) !== owned) return;
+      var current = state.client.server && server.id === state.client.server.id;
+      choices.push('<button class="server-option' + (current ? " is-current" : "") +
+        '" data-focusable="true" data-server-switch="' + index + '">' +
+        '<strong>' + escapeHtml(server.name) + '</strong><small>' +
+        (current ? "Connected" : (owned ? "Owned" : "Shared")) + "</small></button>");
+    });
+    if (!choices.length) return "";
+    return '<div class="server-group"><h3>' + escapeHtml(title) +
+      '</h3><div class="server-grid">' + choices.join("") + "</div></div>";
+  }
+
+  function renderLibrariesPage(libraries) {
+    ensureCurrentPlexServer();
+    var servers = providerName() === "Plex"
+      ? '<section class="server-picker"><h2>Plex Servers</h2>' +
+        plexServerGroupHtml("Your Server", true) +
+        plexServerGroupHtml("Shared With You", false) + "</section>"
+      : "";
+    var libraryContent = libraries.length
+      ? '<div class="library-grid">' + libraries.map(function (library, index) {
+        return '<button class="library-button" data-focusable="true" data-library="' + index +
+          '"><strong>' + escapeHtml(library.title) + '</strong><small>' +
+          escapeHtml(library.type) + "</small></button>";
+      }).join("") + "</div>"
+      : '<div class="empty-state">No supported libraries were found.</div>';
+    setBody(servers + '<section class="library-list"><h2>Libraries</h2>' + libraryContent + "</section>");
+    focusFirst(byId("content-body"));
+  }
+
+  function routeLibraries() {
+    setActiveRoute("libraries");
+    setPage("Libraries", serverName());
+    bodyLoading("Loading libraries and servers…");
+    var serversPromise = providerName() === "Plex"
+      ? state.client.getServers().catch(function () { return state.pendingServers; })
+      : Promise.resolve([]);
+    Promise.all([state.client.getLibraries(), serversPromise]).then(function (results) {
+      state.libraries = results[0];
+      if (providerName() === "Plex" && results[1].length) state.pendingServers = results[1];
+      if (providerName() === "Plex") Api.saveSession(state.client.toSession());
+      if (state.route !== "libraries") return;
+      renderLibrariesPage(state.libraries);
+    }).catch(function (error) { bodyError(error, "libraries"); });
+  }
+
+  function switchPlexServer(index) {
+    var server = state.pendingServers[index];
+    if (!server || providerName() !== "Plex") return;
+    if (state.client.server && server.id === state.client.server.id) return;
+    var previousSession = state.client.toSession();
+    setLoading("Connecting to " + server.name + "…");
+    state.client.connect(server);
+    state.client.getLibraries().then(function (libraries) {
+      state.libraries = libraries;
+      state.libraryItems = [];
+      state.libraryVisibleCount = 0;
+      state.items = {};
+      Api.saveSession(state.client.toSession());
+      showScreen("browse");
+      setText("connection-badge", providerName() + " · " + serverName());
+      setActiveRoute("libraries");
+      setPage("Libraries", serverName());
+      renderLibrariesPage(libraries);
+    }).catch(function (error) {
+      state.client = Api.clientFromSession(previousSession);
+      Api.saveSession(previousSession);
+      showScreen("browse");
+      routeLibraries();
+      toast("Could not switch servers: " + friendlyError(error), 7000);
+    });
+  }
+
+  function openLibrary(index) {
+    var library = state.libraries[index];
+    if (!library) return;
+    setPage(library.title, "Library");
+    bodyLoading("Loading " + library.title + "…");
+    state.client.getLibraryItems(library.id).then(function (items) {
+      state.libraryItems = items;
+      state.libraryVisibleCount = 60;
+      renderLibraryItems();
+    }).catch(function (error) { bodyError(error, "libraries"); });
+  }
+
+  function routeSearch() {
+    setActiveRoute("search");
+    setPage("Search", serverName());
+    setBody(
+      '<form id="search-form" class="search-box">' +
+      '<input id="search-input" data-focusable="true" placeholder="Movies, shows, episodes…" autocomplete="off">' +
+      '<button class="button button--primary" data-focusable="true" type="submit">Search</button></form>' +
+      '<div id="search-results" class="empty-state">Enter a title to search your server.</div>'
+    );
+    focusFirst(byId("content-body"));
+  }
+
+  function runSearch(term) {
+    term = String(term || "").trim();
+    if (!term) return;
+    var results = byId("search-results");
+    results.className = "empty-state";
+    results.innerHTML = '<div class="spinner"></div><p>Searching…</p>';
+    state.client.search(term).then(function (items) {
+      results.className = "";
+      results.innerHTML = gridHtml(items, { limit: 60 });
+      focusFirst(results);
+    }).catch(function (error) {
+      results.className = "error-state";
+      results.textContent = friendlyError(error);
+    });
+  }
+
+  function routeSettings() {
+    setActiveRoute("settings");
+    setPage("Settings", providerName());
+    var serverUrl = state.client.baseUrl || "";
+    setBody(
+      '<div class="dialog-card dialog-card--wide" style="margin:8px 0;text-align:left">' +
+      '<p class="eyebrow">CONNECTED ACCOUNT</p><h2>' + escapeHtml(serverName()) + "</h2>" +
+      "<p>Provider: " + escapeHtml(providerName()) + "</p>" +
+      "<p>Server: " + escapeHtml(serverUrl) + "</p>" +
+      '<p class="privacy-note">Access tokens are stored only in this app\'s local Tizen storage. ' +
+      "Signing out deletes the saved session.</p>" +
+      '<button class="button" data-action="sign-out" data-focusable="true">Sign out</button></div>'
+    );
+    focusFirst(byId("content-body"));
+  }
+
+  function navigate(route) {
+    if (!state.client) return;
+    state.currentDetail = null;
+    state.currentPlayTarget = null;
+    state.detailStack = [];
+    if (route === "home") routeHome();
+    if (route === "libraries") routeLibraries();
+    if (route === "search") routeSearch();
+    if (route === "settings") routeSettings();
+  }
+
+  function activateItem(item, directPlay) {
+    if (!item) return;
+    if (item.playable && (directPlay || item.type === "episode" || item.type === "clip")) {
+      state.player.start(item);
+      return;
+    }
+    if (directPlay && item.type === "show" && state.client.getShowUpNext) {
+      toast("Finding the next episode…", 1800);
+      state.client.getShowUpNext(item.id).then(function (nextEpisode) {
+        if (nextEpisode) {
+          rememberItems([nextEpisode]);
+          state.player.start(nextEpisode);
+        } else {
+          openDetail(item, false);
+        }
+      }).catch(function () { openDetail(item, false); });
+      return;
+    }
+    openDetail(item, false);
+  }
+
+  function playButtonLabel(item, showContext) {
+    if (!item) return "▶ Play";
+    if (item.resumeMs > 30000) return showContext ? "▶ Resume episode" : "▶ Resume";
+    if (showContext) {
+      var raw = item.raw || {};
+      var seasonNumber = Number(raw.parentIndex || raw.ParentIndexNumber || 0);
+      var episodeNumber = Number(raw.index || raw.IndexNumber || 0);
+      return seasonNumber === 1 && episodeNumber === 1 ? "▶ Play first episode" : "▶ Play next episode";
+    }
+    return "▶ Play";
+  }
+
+  function openDetail(item, fromHistory) {
+    if (!item) return;
+    var previous = state.screen === "detail" ? state.currentDetail : null;
+    if (!fromHistory) {
+      if (previous) state.detailStack.push(previous);
+      else state.detailStack = [];
+    }
+    setLoading("Loading details…");
+    state.client.getDetails(item.id).then(function (detail) {
+      state.currentDetail = detail;
+      state.currentPlayTarget = detail.playable ? detail : null;
+      rememberItems([detail]);
+      setText("detail-eyebrow", String(detail.type || "Media") + (detail.year ? " · " + detail.year : ""));
+      setText("detail-title", detail.title);
+      setText("detail-meta", [detail.subtitle, formatDuration(detail.durationMs)].filter(Boolean).join("  ·  "));
+      setText("detail-summary", detail.summary || "No description is available.");
+      byId("detail-backdrop").style.backgroundImage = detail.art ? 'url("' + detail.art.replace(/"/g, "%22") + '")' : "";
+      var playButton = byId("detail-play");
+      playButton.classList.toggle("hidden", !detail.playable && detail.type !== "show");
+      playButton.disabled = !detail.playable;
+      playButton.textContent = detail.playable ? playButtonLabel(detail, false) : "Finding next episode…";
+      byId("detail-children").innerHTML = "";
+      showScreen("detail");
+      if (detail.hasChildren) loadChildren(detail);
+      if (detail.type === "show" && state.client.getShowUpNext) {
+        state.client.getShowUpNext(detail.id).then(function (nextEpisode) {
+          if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
+          state.currentPlayTarget = nextEpisode;
+          if (!nextEpisode) {
+            hide(playButton);
+            return;
+          }
+          rememberItems([nextEpisode]);
+          show(playButton);
+          playButton.disabled = false;
+          playButton.textContent = playButtonLabel(nextEpisode, true);
+          if (document.activeElement && document.activeElement.classList.contains("detail-back")) {
+            playButton.focus();
+          }
+        }).catch(function () {
+          if (state.currentDetail && state.currentDetail.id === detail.id) hide(playButton);
+        });
+      }
+    }).catch(function (error) {
+      toast(friendlyError(error));
+      if (previous) showScreen("detail");
+      else showScreen("browse");
+    });
+  }
+
+  function loadChildren(detail) {
+    detail = detail || state.currentDetail;
+    if (!detail) return;
+    var container = byId("detail-children");
+    container.innerHTML = '<div class="children-loading"><div class="spinner"></div><p>Loading ' +
+      (detail.type === "show" ? "seasons" : "episodes") + '…</p></div>';
+    state.client.getChildren(detail.id, detail).then(function (items) {
+      if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
+      container.innerHTML = items.length
+        ? shelfHtml({ title: detail.type === "show" ? "Seasons" : "Episodes", items: items }, {
+          directPlayable: detail.type !== "show",
+          limit: 60
+        })
+        : '<div class="empty-state">No episodes were found.</div>';
+      if (detail.type === "season" || !state.currentPlayTarget) focusFirst(container);
+    }).catch(function (error) {
+      if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
+      container.innerHTML = '<div class="error-state">' + escapeHtml(friendlyError(error)) + "</div>";
+    });
+  }
+
+  function beginPlexLink() {
+    clearInterval(state.pinTimer);
+    var client = new Api.PlexClient();
+    state.client = client;
+    hide(byId("plex-link-retry"));
+    setText("plex-code", "––––");
+    setText("plex-link-status", "Requesting a link code…");
+    showScreen("plex-link");
+    client.createPin().then(function (pin) {
+      if (state.screen !== "plex-link") return;
+      setText("plex-code", pin.code || "––––");
+      setText("plex-link-status", "Waiting for authorization at plex.tv/link");
+      state.pinStartedAt = Date.now();
+      checkPlexPin(client, pin.id);
+      state.pinTimer = setInterval(function () { checkPlexPin(client, pin.id); }, 2000);
+    }).catch(showPlexLinkError);
+  }
+
+  function checkPlexPin(client, pinId) {
+    if (state.screen !== "plex-link") {
+      clearInterval(state.pinTimer);
+      return;
+    }
+    if (Date.now() - state.pinStartedAt > 10 * 60 * 1000) {
+      clearInterval(state.pinTimer);
+      showPlexLinkError(new Error("The code expired. Request a new one."));
+      return;
+    }
+    client.checkPin(pinId).then(function (pin) {
+      if (!pin.authToken) return;
+      clearInterval(state.pinTimer);
+      client.token = pin.authToken;
+      client.accountToken = pin.authToken;
+      setText("plex-link-status", "Signed in. Finding servers…");
+      return client.getServers().then(function (servers) {
+        if (!servers.length) throw new Error("No accessible Plex Media Server was found for this account.");
+        state.pendingServers = servers;
+        if (servers.length === 1) return choosePlexServer(0);
+        renderPlexServers();
+      });
+    }).catch(function (error) {
+      if (error && (error.status === 401 || error.status === 404)) return;
+      clearInterval(state.pinTimer);
+      showPlexLinkError(error);
+    });
+  }
+
+  function showPlexLinkError(error) {
+    setText("plex-link-status", friendlyError(error));
+    show(byId("plex-link-retry"));
+    focusFirst(byId("plex-link-screen"));
+  }
+
+  function renderPlexServers() {
+    byId("server-list").innerHTML = state.pendingServers.map(function (server, index) {
+      return '<button class="choice-button" data-server="' + index + '" data-focusable="true">' +
+        "<span>" + escapeHtml(server.name) + "</span><small>" +
+        (server.owned ? "Owned" : "Shared") + "</small></button>";
+    }).join("");
+    showScreen("server");
+  }
+
+  function choosePlexServer(index) {
+    var server = state.pendingServers[index];
+    if (!server) return;
+    state.client.connect(server);
+    Api.saveSession(state.client.toSession());
+    setLoading("Connecting to " + server.name + "…");
+    validateClient().then(openBrowse).catch(function (error) {
+      Api.clearSession();
+      toast(friendlyError(error), 7000);
+      renderPlexServers();
+    });
+  }
+
+  function jellyfinLogin(event) {
+    event.preventDefault();
+    var url = byId("jellyfin-url").value;
+    var username = byId("jellyfin-user").value;
+    var password = byId("jellyfin-password").value;
+    var errorElement = byId("jellyfin-error");
+    hide(errorElement);
+    setLoading("Signing in to Jellyfin…");
+    Api.JellyfinClient.authenticate(url, username, password).then(function (client) {
+      state.client = client;
+      Api.saveSession(client.toSession());
+      return validateClient();
+    }).then(openBrowse).catch(function (error) {
+      showScreen("jellyfin-login");
+      errorElement.textContent = friendlyError(error);
+      show(errorElement);
+      focusFirst(byId("jellyfin-login-screen"));
+    });
+  }
+
+  function validateClient() {
+    return state.client.getLibraries().then(function (libraries) {
+      state.libraries = libraries;
+      return true;
+    });
+  }
+
+  function restoreSession() {
+    var session = Api.loadSession();
+    if (!session) {
+      showScreen("welcome");
+      return;
+    }
+    state.client = Api.clientFromSession(session);
+    state.pendingServers = state.client && state.client.servers ? state.client.servers.slice() : [];
+    setLoading("Reconnecting to " + serverName() + "…");
+    validateClient().then(openBrowse).catch(function () {
+      Api.clearSession();
+      state.client = null;
+      showScreen("welcome");
+      toast("The saved session is no longer valid. Please sign in again.", 6500);
+    });
+  }
+
+  function signOut() {
+    if (state.player) state.player.stop();
+    Api.clearSession();
+    state.client = null;
+    state.items = {};
+    state.libraries = [];
+    state.libraryItems = [];
+    state.libraryVisibleCount = 0;
+    state.currentDetail = null;
+    state.currentPlayTarget = null;
+    state.detailStack = [];
+    state.pendingServers = [];
+    showScreen("welcome");
+  }
+
+  function formatTime(ms) {
+    var seconds = Math.max(0, Math.floor((ms || 0) / 1000));
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var rest = seconds % 60;
+    return (hours ? hours + ":" + String(minutes).padStart(2, "0") : String(minutes)) +
+      ":" + String(rest).padStart(2, "0");
+  }
+
+  function formatDuration(ms) {
+    if (!ms) return "";
+    var minutes = Math.round(ms / 60000);
+    if (minutes < 60) return minutes + " min";
+    return Math.floor(minutes / 60) + "h " + (minutes % 60) + "m";
+  }
+
+  function PlayerController() {
+    this.playback = null;
+    this.usingAvPlay = false;
+    this.positionMs = 0;
+    this.durationMs = 0;
+    this.timelineOffsetMs = 0;
+    this.resumeSeekPending = false;
+    this.paused = false;
+    this.progressTimer = null;
+    this.chromeTimer = null;
+    this.triedDirect = false;
+    this.returnScreen = "detail";
+    this.returnFocusItem = "";
+    this.returnFocusAction = "";
+    this.html = byId("html-player");
+    this.avObject = byId("av-player");
+    this._bindHtmlEvents();
+  }
+
+  PlayerController.prototype._bindHtmlEvents = function () {
+    var self = this;
+    this.html.addEventListener("timeupdate", function () {
+      if (self.resumeSeekPending) return;
+      self.positionMs = self.timelineOffsetMs + self.html.currentTime * 1000;
+      if (!self.durationMs && Number.isFinite(self.html.duration)) {
+        self.durationMs = self.timelineOffsetMs + self.html.duration * 1000;
+      }
+      self.updateChrome();
+    });
+    this.html.addEventListener("ended", function () { self.stop(true); });
+    this.html.addEventListener("error", function () { self._playbackFailed("The TV could not play this stream."); });
+  };
+
+  PlayerController.prototype.start = function (item) {
+    var self = this;
+    var active = document.activeElement;
+    this.returnScreen = state.screen === "browse" ? "browse" : "detail";
+    this.returnFocusItem = active && active.getAttribute ? (active.getAttribute("data-item") || "") : "";
+    this.returnFocusAction = active && active.getAttribute ? (active.getAttribute("data-action") || "") : "";
+    setLoading("Preparing playback…");
+    return state.client.createPlayback(item).then(function (playback) {
+      self.playback = playback;
+      self.positionMs = playback.startMs || 0;
+      self.durationMs = playback.durationMs || 0;
+      self.paused = false;
+      self.triedDirect = false;
+      setText("player-title", playback.item.title);
+      setText("player-subtitle", playback.item.subtitle || providerName());
+      self.updateChrome();
+      showScreen("player");
+      self._open(playback.url);
+      self.progressTimer = setInterval(function () {
+        state.client.reportProgress(self.playback, self.positionMs, self.paused ? "paused" : "playing");
+      }, 10000);
+      state.client.reportProgress(playback, self.positionMs, "playing");
+      self.showChrome();
+    }).catch(function (error) {
+      toast(friendlyError(error), 6500);
+      self.restoreScreen();
+    });
+  };
+
+  PlayerController.prototype.restoreScreen = function () {
+    var self = this;
+    var name = this.returnScreen === "browse" ? "browse" : "detail";
+    showScreen(name);
+    setTimeout(function () {
+      var scope = byId(name + "-screen");
+      var match = all('[data-focusable="true"]', scope).filter(function (element) {
+        if (self.returnFocusItem) return element.getAttribute("data-item") === self.returnFocusItem;
+        if (self.returnFocusAction) return element.getAttribute("data-action") === self.returnFocusAction;
+        return false;
+      })[0];
+      if (match) {
+        match.focus();
+        reveal(match);
+      }
+    }, 35);
+  };
+
+  PlayerController.prototype._open = function (url) {
+    this.timelineOffsetMs = this.triedDirect ? 0 : Number(this.playback && this.playback.startMs || 0);
+    this.resumeSeekPending = this.triedDirect && this.playback && this.playback.startMs > 0;
+    this.positionMs = Number(this.playback && this.playback.startMs || 0);
+    this.updateChrome();
+    if (window.webapis && window.webapis.avplay) this._openAvPlay(url);
+    else this._openHtml(url);
+  };
+
+  PlayerController.prototype._openAvPlay = function (url) {
+    var self = this;
+    var player = window.webapis.avplay;
+    this.usingAvPlay = true;
+    hide(this.html);
+    show(this.avObject);
+    try {
+      player.close();
+    } catch (_) { /* Already closed. */ }
+    try {
+      player.open(url);
+      player.setDisplayRect(0, 0, 1920, 1080);
+      player.setDisplayMethod("PLAYER_DISPLAY_MODE_LETTER_BOX");
+      try { player.setTimeoutForBuffering(30); } catch (_) { /* Not available on every model year. */ }
+      try { player.setBufferingParam("PLAYER_BUFFER_FOR_PLAY", "PLAYER_BUFFER_SIZE_IN_SECOND", 5); } catch (_) { /* Optional. */ }
+      try { player.setBufferingParam("PLAYER_BUFFER_FOR_RESUME", "PLAYER_BUFFER_SIZE_IN_SECOND", 2); } catch (_) { /* Optional. */ }
+      player.setListener({
+        onbufferingstart: function () { toast("Buffering…", 1200); },
+        onbufferingcomplete: function () { self.showChrome(); },
+        oncurrentplaytime: function (time) {
+          if (self.resumeSeekPending) return;
+          self.positionMs = self.timelineOffsetMs + (Number(time) || 0);
+          self.updateChrome();
+        },
+        onstreamcompleted: function () { self.stop(true); },
+        onerror: function (eventType) {
+          self._playbackFailed("Samsung AVPlay could not play this stream" +
+            (eventType ? " (" + eventType + ")." : "."));
+        }
+      });
+      player.prepareAsync(function () {
+        try {
+          var mediaDuration = Number(player.getDuration()) || 0;
+          if (!self.durationMs && mediaDuration) self.durationMs = self.timelineOffsetMs + mediaDuration;
+          if (self.triedDirect && self.playback.startMs > 0) {
+            player.seekTo(self.playback.startMs, function () {
+              self.resumeSeekPending = false;
+              self.positionMs = self.playback.startMs;
+              self.updateChrome();
+              player.play();
+            }, function () {
+              self.resumeSeekPending = false;
+              player.play();
+            });
+          } else {
+            self.resumeSeekPending = false;
+            player.play();
+          }
+          self.updateChrome();
+        } catch (error) { self._playbackFailed(friendlyError(error)); }
+      }, function (error) {
+        self._playbackFailed("Samsung AVPlay could not prepare this stream" +
+          (error ? " (" + friendlyError(error) + ")." : "."));
+      });
+    } catch (error) {
+      this._playbackFailed(friendlyError(error));
+    }
+  };
+
+  PlayerController.prototype._openHtml = function (url) {
+    var self = this;
+    this.usingAvPlay = false;
+    hide(this.avObject);
+    show(this.html);
+    this.html.src = url;
+    if (this.triedDirect && this.playback.startMs > 0) {
+      var resumeAfterMetadata = function () {
+        self.html.removeEventListener("loadedmetadata", resumeAfterMetadata);
+        try {
+          self.html.currentTime = self.playback.startMs / 1000;
+          self.positionMs = self.playback.startMs;
+        } catch (_) { /* Stream may not be seekable. */ }
+        self.resumeSeekPending = false;
+        self.updateChrome();
+      };
+      if (this.html.readyState >= 1) resumeAfterMetadata();
+      else this.html.addEventListener("loadedmetadata", resumeAfterMetadata);
+    }
+    var promise = this.html.play();
+    if (promise && promise.catch) promise.catch(function (error) { self._playbackFailed(friendlyError(error)); });
+  };
+
+  PlayerController.prototype._playbackFailed = function (message) {
+    if (this.playback && this.playback.directUrl && !this.triedDirect) {
+      this.triedDirect = true;
+      toast("Transcode failed; trying direct play…", 3200);
+      this._closeMedia();
+      this._open(this.playback.directUrl);
+      return;
+    }
+    toast(message || "Playback failed.", 7000);
+    this.stop(false);
+  };
+
+  PlayerController.prototype._closeMedia = function () {
+    if (this.usingAvPlay && window.webapis && window.webapis.avplay) {
+      try { window.webapis.avplay.stop(); } catch (_) { /* no-op */ }
+      try { window.webapis.avplay.close(); } catch (_) { /* no-op */ }
+    }
+    this.html.pause();
+    this.html.removeAttribute("src");
+    this.html.load();
+  };
+
+  PlayerController.prototype.toggle = function () {
+    if (!this.playback) return;
+    try {
+      if (this.usingAvPlay) {
+        if (this.paused) window.webapis.avplay.play();
+        else window.webapis.avplay.pause();
+      } else {
+        if (this.paused) this.html.play();
+        else this.html.pause();
+      }
+      this.paused = !this.paused;
+      state.client.reportProgress(this.playback, this.positionMs, this.paused ? "paused" : "playing");
+      this.showChrome();
+    } catch (error) { toast(friendlyError(error)); }
+  };
+
+  PlayerController.prototype.seek = function (deltaMs) {
+    if (!this.playback) return;
+    var target = Math.max(this.timelineOffsetMs, Math.min(this.durationMs || Infinity, this.positionMs + deltaMs));
+    var mediaTarget = Math.max(0, target - this.timelineOffsetMs);
+    try {
+      if (this.usingAvPlay) window.webapis.avplay.seekTo(mediaTarget);
+      else this.html.currentTime = mediaTarget / 1000;
+      this.positionMs = target;
+      this.updateChrome();
+      this.showChrome();
+    } catch (error) { toast(friendlyError(error)); }
+  };
+
+  PlayerController.prototype.stop = function (completed) {
+    if (!this.playback) {
+      this.restoreScreen();
+      return;
+    }
+    clearInterval(this.progressTimer);
+    clearTimeout(this.chromeTimer);
+    state.client.reportProgress(this.playback, completed ? this.durationMs : this.positionMs, "stopped");
+    this._closeMedia();
+    this.playback = null;
+    this.positionMs = 0;
+    this.durationMs = 0;
+    this.timelineOffsetMs = 0;
+    this.resumeSeekPending = false;
+    this.restoreScreen();
+  };
+
+  PlayerController.prototype.updateChrome = function () {
+    setText("player-current", formatTime(this.positionMs));
+    setText("player-duration", formatTime(this.durationMs));
+    var percent = this.durationMs ? Math.min(100, this.positionMs / this.durationMs * 100) : 0;
+    byId("player-progress-fill").style.width = percent + "%";
+  };
+
+  PlayerController.prototype.showChrome = function () {
+    var chrome = byId("player-chrome");
+    chrome.classList.remove("is-hidden");
+    clearTimeout(this.chromeTimer);
+    this.chromeTimer = setTimeout(function () { chrome.classList.add("is-hidden"); }, 4500);
+  };
+
+  function reveal(element) {
+    if (!element || !element.scrollIntoView) return;
+    element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+  }
+
+  function focusElement(element) {
+    if (!element) return false;
+    element.focus();
+    reveal(element);
+    return true;
+  }
+
+  function focusWithinContainer(active, direction) {
+    var row = closest(active, ".card-row");
+    if (row) {
+      var rowItems = all('[data-focusable="true"]:not([disabled])', row);
+      var rowIndex = rowItems.indexOf(active);
+      if (direction === "left") {
+        if (rowIndex > 0) return focusElement(rowItems[rowIndex - 1]);
+        return false;
+      }
+      if (direction === "right") {
+        if (rowIndex < rowItems.length - 1) return focusElement(rowItems[rowIndex + 1]);
+        return true;
+      }
+      if (direction === "up" || direction === "down") {
+        var rowScope = closest(row, ".content-body") || closest(row, ".detail-children") || byId(state.screen + "-screen");
+        var rows = all(".card-row", rowScope);
+        var adjacentRow = rows[rows.indexOf(row) + (direction === "up" ? -1 : 1)];
+        if (adjacentRow) {
+          var adjacentItems = all('[data-focusable="true"]:not([disabled])', adjacentRow);
+          return focusElement(adjacentItems[Math.min(rowIndex, adjacentItems.length - 1)]);
+        }
+        if (direction === "down") return true;
+      }
+    }
+    var grid = closest(active, ".library-grid");
+    if (grid) {
+      var gridItems = all('[data-focusable="true"]:not([disabled])', grid);
+      var gridIndex = gridItems.indexOf(active);
+      if (direction === "left") {
+        if (gridIndex % 6 !== 0) return focusElement(gridItems[gridIndex - 1]);
+        return false;
+      }
+      if (direction === "right") {
+        if (gridIndex % 6 !== 5 && gridIndex < gridItems.length - 1) return focusElement(gridItems[gridIndex + 1]);
+        return true;
+      }
+      if (direction === "up") {
+        if (gridIndex >= 6) return focusElement(gridItems[gridIndex - 6]);
+        return false;
+      }
+      if (direction === "down") {
+        if (gridIndex + 6 < gridItems.length) return focusElement(gridItems[gridIndex + 6]);
+        return true;
+      }
+    }
+    var nav = closest(active, "#nav-list");
+    if (nav && (direction === "up" || direction === "down")) {
+      var navItems = all('[data-focusable="true"]:not([disabled])', nav);
+      var navIndex = navItems.indexOf(active);
+      return focusElement(navItems[navIndex + (direction === "up" ? -1 : 1)]);
+    }
+    var serverGrid = closest(active, ".server-grid");
+    if (serverGrid) {
+      var serverItems = all('[data-focusable="true"]:not([disabled])', serverGrid);
+      var serverIndex = serverItems.indexOf(active);
+      if (direction === "left" && serverIndex % 3 !== 0) return focusElement(serverItems[serverIndex - 1]);
+      if (direction === "right" && serverIndex % 3 !== 2 && serverIndex < serverItems.length - 1) {
+        return focusElement(serverItems[serverIndex + 1]);
+      }
+      if (direction === "up" && serverIndex >= 3) return focusElement(serverItems[serverIndex - 3]);
+      if (direction === "down" && serverIndex + 3 < serverItems.length) return focusElement(serverItems[serverIndex + 3]);
+    }
+    return false;
+  }
+
+  function moveFocus(direction) {
+    var active = document.activeElement;
+    if (active && focusWithinContainer(active, direction)) return;
+    var screen = byId(state.screen + "-screen") || document;
+    var candidates = all('[data-focusable="true"]:not([disabled])', screen).filter(function (element) {
+      return element.offsetParent !== null && element !== active;
+    });
+    if (!active || active === document.body) {
+      focusFirst();
+      return;
+    }
+    var from = active.getBoundingClientRect();
+    var fx = from.left + from.width / 2;
+    var fy = from.top + from.height / 2;
+    var best = null;
+    var bestScore = Infinity;
+    candidates.forEach(function (candidate) {
+      var rect = candidate.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top + rect.height / 2;
+      var dx = x - fx;
+      var dy = y - fy;
+      var primary;
+      var secondary;
+      if (direction === "left" && dx < -4) { primary = -dx; secondary = Math.abs(dy); }
+      else if (direction === "right" && dx > 4) { primary = dx; secondary = Math.abs(dy); }
+      else if (direction === "up" && dy < -4) { primary = -dy; secondary = Math.abs(dx); }
+      else if (direction === "down" && dy > 4) { primary = dy; secondary = Math.abs(dx); }
+      else return;
+      var score = primary + secondary * 2.4;
+      if (score < bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    });
+    if (best) {
+      focusElement(best);
+    }
+  }
+
+  function exitApplication() {
+    try {
+      if (window.tizen && tizen.application) {
+        tizen.application.getCurrentApplication().exit();
+        return;
+      }
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: "exit-app" }));
+        return;
+      }
+    } catch (_) { /* Fall through in browser preview. */ }
+    toast("Press Back again from the TV home screen to exit.");
+  }
+
+  function goBack() {
+    if (state.screen !== "player" && Date.now() < state.suppressExitUntil) return;
+    if (state.screen === "player") {
+      state.suppressExitUntil = Date.now() + 2500;
+      state.player.stop(false);
+      return;
+    }
+    if (state.screen === "detail") {
+      if (state.detailStack.length) {
+        openDetail(state.detailStack.pop(), true);
+      } else {
+        state.currentDetail = null;
+        state.currentPlayTarget = null;
+        showScreen("browse");
+      }
+      return;
+    }
+    if (state.screen === "plex-link" || state.screen === "jellyfin-login" || state.screen === "server") {
+      clearInterval(state.pinTimer);
+      showScreen("welcome");
+      return;
+    }
+    if (state.screen === "browse" && state.route !== "home") {
+      routeHome();
+      return;
+    }
+    exitApplication();
+  }
+
+  function handleHardwareBack() {
+    var now = Date.now();
+    if (now - state.lastBackAt < 700) return;
+    state.lastBackAt = now;
+    goBack();
+  }
+
+  function handleKey(event) {
+    var code = event.keyCode;
+    if (state.screen === "player") {
+      if ([13, 19, 415, 10252].indexOf(code) !== -1) state.player.toggle();
+      else if (code === 37 || code === 412) state.player.seek(-30000);
+      else if (code === 39 || code === 417) state.player.seek(30000);
+      else if (code === 10009 || code === 27) handleHardwareBack();
+      else if (code === 413) goBack();
+      else state.player.showChrome();
+      event.preventDefault();
+      return;
+    }
+    if ([37, 38, 39, 40].indexOf(code) !== -1) {
+      var now = Date.now();
+      if (now - state.lastNavigationAt < 45) {
+        event.preventDefault();
+        return;
+      }
+      state.lastNavigationAt = now;
+    }
+    if (code === 37) { moveFocus("left"); event.preventDefault(); }
+    else if (code === 38) { moveFocus("up"); event.preventDefault(); }
+    else if (code === 39) { moveFocus("right"); event.preventDefault(); }
+    else if (code === 40) { moveFocus("down"); event.preventDefault(); }
+    else if (code === 10009 || code === 27) { handleHardwareBack(); event.preventDefault(); }
+  }
+
+  function registerRemoteKeys() {
+    try {
+      if (window.tizen && tizen.tvinputdevice) {
+        ["MediaPlayPause", "MediaPlay", "MediaPause", "MediaStop", "MediaFastForward", "MediaRewind"].forEach(function (key) {
+          try { tizen.tvinputdevice.registerKey(key); } catch (_) { /* Key availability differs by model. */ }
+        });
+      }
+    } catch (_) { /* Browser preview has no Tizen API. */ }
+  }
+
+  function bindEvents() {
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("tizenhwkey", function (event) {
+      if (event.keyName === "back") {
+        handleHardwareBack();
+        if (event.preventDefault) event.preventDefault();
+      }
+    });
+    document.addEventListener("click", function (event) {
+      var target = closest(event.target, "button,[data-item],[data-route],[data-library]");
+      if (!target) return;
+      var route = target.getAttribute("data-route");
+      var itemId = target.getAttribute("data-item");
+      var libraryIndex = target.getAttribute("data-library");
+      var serverIndex = target.getAttribute("data-server");
+      var serverSwitchIndex = target.getAttribute("data-server-switch");
+      var action = target.getAttribute("data-action");
+      if (route) navigate(route);
+      if (itemId !== null) activateItem(state.items[itemId], target.getAttribute("data-direct-play") === "true");
+      if (libraryIndex !== null) openLibrary(Number(libraryIndex));
+      if (serverIndex !== null) choosePlexServer(Number(serverIndex));
+      if (serverSwitchIndex !== null) switchPlexServer(Number(serverSwitchIndex));
+      if (action === "back") goBack();
+      if (action === "sign-out") signOut();
+      if (action === "load-more") {
+        var nextItem = state.libraryItems[state.libraryVisibleCount];
+        state.libraryVisibleCount += 60;
+        renderLibraryItems(nextItem ? itemKey(nextItem) : "");
+      }
+    });
+    byId("plex-connect").addEventListener("click", beginPlexLink);
+    byId("plex-link-retry").addEventListener("click", beginPlexLink);
+    byId("jellyfin-connect").addEventListener("click", function () { showScreen("jellyfin-login"); });
+    byId("jellyfin-form").addEventListener("submit", jellyfinLogin);
+    byId("content-body").addEventListener("submit", function (event) {
+      if (event.target && event.target.id === "search-form") {
+        event.preventDefault();
+        runSearch(byId("search-input").value);
+      }
+    });
+    byId("detail-play").addEventListener("click", function () {
+      if (state.currentPlayTarget) state.player.start(state.currentPlayTarget);
+    });
+  }
+
+  function updateClock() {
+    var now = new Date();
+    setText("clock", now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+  }
+
+  function init() {
+    state.player = new PlayerController();
+    bindEvents();
+    registerRemoteKeys();
+    updateClock();
+    setInterval(updateClock, 30000);
+    restoreSession();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+}());

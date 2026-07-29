@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MediaGridItem" extends="Group">
+  <interface>
+    <field id="itemContent" type="node" onChange="showContent" />
+    <field id="focusPercent" type="float" onChange="showFocus" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/MediaGridItem.brs" />
+  <children>
+    <Rectangle id="focusFrame" width="244" height="356" color="#f5a623" opacity="0" />
+    <Poster
+      id="poster"
+      translation="[7,7]"
+      width="230"
+      height="342"
+      loadDisplayMode="scaleToZoom"
+      failedBitmapUri="pkg:/images/poster-placeholder.png"
+      loadingBitmapUri="pkg:/images/poster-placeholder.png" />
+    <Rectangle translation="[7,284]" width="230" height="65" color="#090b10" opacity="0.90" />
+    <Label
+      id="title"
+      translation="[18,292]"
+      width="208"
+      height="50"
+      color="#f4f6fb"
+      font="font:SmallSystemFont"
+      wrap="true"
+      maxLines="2" />
+    <Rectangle id="progressTrack" translation="[7,342]" width="230" height="7" color="#313747" />
+    <Rectangle id="progressFill" translation="[7,342]" width="0" height="7" color="#f5a623" />
+  </children>
+</component>

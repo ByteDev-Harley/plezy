@@ -32,8 +32,22 @@ fun promoteDirectory(staging: File, destination: File) {
       Files.move(destination.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
     }
     try {
-      Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+      if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        // Windows can reject a directory rename while an antivirus/indexer has
+        // a transient handle open. Copy from the verified staging tree while
+        // retaining the rollback backup; the finally block removes staging.
+        if (!staging.copyRecursively(destination, overwrite = false)) {
+          throw GradleException("Failed to copy native artifact staging directory to ${destination.absolutePath}")
+        }
+      } else {
+        Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+      }
     } catch (promotionFailure: Exception) {
+      if (destination.exists() && !destination.deleteRecursively()) {
+        promotionFailure.addSuppressed(
+          GradleException("Failed to remove incomplete native artifact at ${destination.absolutePath}")
+        )
+      }
       if (hadDestination && backup.exists()) {
         try {
           Files.move(backup.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
@@ -63,6 +77,11 @@ val mpvSha256 = "d55d440e587b2a9ffb91874d93069460a987be05fe72af8394849983f0df2d7
 val mpvDir = layout.buildDirectory.dir("libmpv").get().asFile
 val mpvAar = "libmpv-release.aar"
 val mpvUrl = "https://github.com/edde746/libmpv-android/releases/download/$mpvVersion/$mpvAar"
+val unzipExecutable = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+  File(rootProject.projectDir.parentFile, "scripts/windows-tools/unzip.cmd").absolutePath
+} else {
+  "unzip"
+}
 
 val media3Version = "1.10.1"
 val mpvFfmpegVersion = "8.0.1"
@@ -101,25 +120,34 @@ val downloadLibmpv = tasks.register("downloadLibmpv") {
 
 // Extract libc++_shared.so from the libmpv AAR so the app source set can package
 // it with top merge priority (see packaging { jniLibs } and sourceSets below).
+val mpvLibcxxPatterns = if (System.getenv("AMAZON") != null) {
+  listOf(
+    "jni/arm64-v8a/libc++_shared.so",
+    "jni/armeabi-v7a/libc++_shared.so"
+  )
+} else {
+  listOf("jni/*/libc++_shared.so")
+}
 val extractMpvLibcxx = tasks.register("extractMpvLibcxx") {
   dependsOn(downloadLibmpv)
   val aar = File(mpvDir, mpvAar)
   val outDir = File(mpvDir, "libcxx")
   inputs.file(aar)
+  inputs.property("patterns", mpvLibcxxPatterns.joinToString(","))
   outputs.dir(outDir)
   doLast {
     outDir.deleteRecursively() // drop stale ABIs from a previous AAR version
     outDir.mkdirs()
     providers.exec {
-      commandLine(
-        "unzip",
+      val unzipArguments = mutableListOf(
+        unzipExecutable,
         "-q",
         "-o",
-        aar.absolutePath,
-        "jni/*/libc++_shared.so",
-        "-d",
-        outDir.absolutePath
+        aar.absolutePath
       )
+      unzipArguments.addAll(mpvLibcxxPatterns)
+      unzipArguments.addAll(listOf("-d", outDir.absolutePath))
+      commandLine(*unzipArguments.toTypedArray())
     }.result.get().assertNormalExitValue()
   }
 }
@@ -381,12 +409,15 @@ android {
 
   buildTypes {
     release {
-      // Only use release signing if key.properties exists (not in CI/CD)
+      // Store/release builds use the publisher key. The explicit sideload flag
+      // creates an optimized, debug-key-signed APK for private TV installation;
+      // it must never be uploaded to an app store.
       val keystorePropertiesFile = rootProject.file("key.properties")
       if (keystorePropertiesFile.exists()) {
         signingConfig = signingConfigs.getByName("release")
+      } else if (System.getenv("PLEZY_TV_SIDELOAD_SIGNING") == "1") {
+        signingConfig = signingConfigs.getByName("debug")
       }
-      // If key.properties doesn't exist, it will use debug signing for CI builds
       ndk {
         debugSymbolLevel = "FULL"
       }
@@ -434,7 +465,19 @@ android {
       // pickFirst only suppresses the duplicate libc++ merge error; the
       // sourceSets rule below makes libmpv's newer runtime win for
       // std::from_chars<float>, while older native consumers remain ABI-compatible.
-      pickFirsts.add("lib/*/libc++_shared.so")
+      if (System.getenv("AMAZON") != null) {
+        pickFirsts.addAll(
+          listOf(
+            "lib/arm64-v8a/libc++_shared.so",
+            "lib/armeabi-v7a/libc++_shared.so"
+          )
+        )
+        // Some AAR dependencies contain emulator JNI libraries even when
+        // ndk.abiFilters limits the app's own native build.
+        excludes.addAll(listOf("lib/x86/**", "lib/x86_64/**"))
+      } else {
+        pickFirsts.add("lib/*/libc++_shared.so")
+      }
     }
   }
 

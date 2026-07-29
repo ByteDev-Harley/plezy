@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="PlezyScene" extends="Scene">
+  <interface>
+    <field id="launchArgs" type="assocarray" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/PlezyScene.brs" />
+  <children>
+    <Rectangle width="1920" height="1080" color="#090b10" />
+    <Poster
+      id="backdrop"
+      width="1920"
+      height="1080"
+      opacity="0.20"
+      loadDisplayMode="scaleToZoom" />
+    <Rectangle width="1920" height="1080" color="#090b10" opacity="0.56" />
+
+    <Poster id="brand" translation="[54,35]" width="82" height="82" uri="pkg:/images/plezy-mark.png" />
+    <Label id="brandName" translation="[150,49]" width="260" height="54" text="PLEZY" color="#f4f6fb" font="font:LargeBoldSystemFont" />
+    <Label id="serverName" translation="[1510,52]" width="350" height="38" horizAlign="right" color="#aeb5c4" font="font:SmallSystemFont" />
+
+    <Group id="welcomeView">
+      <Label translation="[220,250]" width="1480" height="90" text="Your media. Your television." color="#f4f6fb" horizAlign="center" font="font:ExtraLargeBoldSystemFont" />
+      <Label
+        translation="[390,354]"
+        width="1140"
+        height="110"
+        text="A native Roku client for Plex and Jellyfin, designed for the remote in your hand."
+        color="#aeb5c4"
+        font="font:MediumSystemFont"
+        horizAlign="center"
+        wrap="true"
+        maxLines="2" />
+      <ButtonGroup id="providerButtons" translation="[640,530]" layoutDirection="vert" itemSpacings="[24]">
+        <Button text="Connect Plex" minWidth="640" maxWidth="640" />
+        <Button text="Connect Jellyfin" minWidth="640" maxWidth="640" />
+      </ButtonGroup>
+      <Label
+        translation="[495,825]"
+        width="930"
+        height="50"
+        text="You will sign in directly with your own server. Plezy does not proxy your credentials."
+        color="#747d90"
+        font="font:SmallSystemFont"
+        horizAlign="center" />
+    </Group>
+
+    <Group id="browseView" visible="false">
+      <Rectangle translation="[35,145]" width="315" height="875" color="#11151f" opacity="0.96" />
+      <LabelList
+        id="navList"
+        translation="[55,180]"
+        itemSize="[275,72]"
+        numRows="8"
+        drawFocusFeedback="true"
+        color="#aeb5c4"
+        focusedColor="#090b10"
+        focusBitmapUri="pkg:/images/nav-focus.png" />
+      <Label id="pageTitle" translation="[405,145]" width="1360" height="70" color="#f4f6fb" font="font:LargeBoldSystemFont" />
+      <Label id="pageSubtitle" translation="[409,216]" width="1340" height="42" color="#aeb5c4" font="font:SmallSystemFont" />
+      <MarkupGrid
+        id="mediaGrid"
+        translation="[405,285]"
+        itemComponentName="MediaGridItem"
+        itemSize="[244,356]"
+        itemSpacing="[24,32]"
+        numColumns="6"
+        numRows="2"
+        vertFocusAnimationStyle="fixedFocus"
+        drawFocusFeedback="false" />
+      <Label
+        id="emptyMessage"
+        translation="[520,500]"
+        width="1150"
+        height="100"
+        visible="false"
+        text="Nothing to show here yet."
+        color="#747d90"
+        font="font:MediumSystemFont"
+        horizAlign="center" />
+    </Group>
+
+    <Group id="detailsView" visible="false">
+      <Rectangle width="1920" height="1080" color="#090b10" opacity="0.94" />
+      <Poster id="detailBackdrop" width="1920" height="1080" opacity="0.22" loadDisplayMode="scaleToZoom" />
+      <Rectangle width="1920" height="1080" color="#090b10" opacity="0.42" />
+      <Poster
+        id="detailPoster"
+        translation="[150,190]"
+        width="390"
+        height="585"
+        loadDisplayMode="scaleToZoom"
+        failedBitmapUri="pkg:/images/poster-placeholder.png" />
+      <Label id="detailTitle" translation="[620,205]" width="1120" height="85" color="#f4f6fb" font="font:ExtraLargeBoldSystemFont" maxLines="2" wrap="true" />
+      <Label id="detailMeta" translation="[624,320]" width="1050" height="42" color="#f5a623" font="font:MediumBoldSystemFont" />
+      <Label
+        id="detailSummary"
+        translation="[624,390]"
+        width="1060"
+        height="270"
+        color="#c5cad5"
+        font="font:MediumSystemFont"
+        wrap="true"
+        maxLines="7" />
+      <ButtonGroup id="detailButtons" translation="[620,710]" layoutDirection="horiz" itemSpacings="[24]">
+        <Button text="Play" minWidth="290" maxWidth="290" />
+        <Button text="Browse" minWidth="290" maxWidth="290" />
+      </ButtonGroup>
+      <Label translation="[150,890]" width="600" height="38" text="Press Back to return" color="#747d90" font="font:SmallSystemFont" />
+    </Group>
+
+    <Video id="video" width="1920" height="1080" visible="false" enableUI="true" />
+    <BusySpinner id="spinner" translation="[910,495]" clockwise="true" visible="false" />
+    <Label
+      id="loadingText"
+      translation="[610,600]"
+      width="700"
+      height="46"
+      horizAlign="center"
+      color="#c5cad5"
+      font="font:SmallSystemFont"
+      visible="false" />
+    <Timer id="plexPinTimer" duration="2" repeat="true" />
+    <Timer id="progressTimer" duration="10" repeat="true" />
+    <ApiTask id="apiTask" />
+    <ApiTask id="progressTask" />
+  </children>
+</component>

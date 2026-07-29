@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="https://plezy.app/tv/samsung"
+        version="2.10.5"
+        viewmodes="maximized">
+  <tizen:application id="p1ezytv001.PlezyTV"
+                     package="p1ezytv001"
+                     required_version="6.0"/>
+  <content src="index.html"/>
+  <feature name="http://tizen.org/feature/screen.size.all"/>
+  <feature name="http://tizen.org/feature/network.internet"/>
+  <icon src="icon.png"/>
+  <name>Plezy TV</name>
+  <description>Plezy for Plex and Jellyfin on Samsung Tizen TVs</description>
+  <author href="https://github.com/edde746/plezy">Plezy contributors</author>
+  <license href="https://www.gnu.org/licenses/gpl-3.0.html">GPL-3.0</license>
+  <access origin="*" subdomains="true"/>
+  <tizen:content-security-policy>default-src 'self' data: blob: http: https:; connect-src *; img-src * data: blob:; media-src * blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'self'</tizen:content-security-policy>
+  <tizen:privilege name="http://tizen.org/privilege/internet"/>
+  <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+  <tizen:profile name="tv-samsung"/>
+  <tizen:setting screen-orientation="landscape"
+                 context-menu="disable"
+                 background-support="disable"
+                 encryption="disable"
+                 install-location="auto"
+                 hwkey-event="enable"/>
+</widget>

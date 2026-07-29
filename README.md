@@ -108,6 +108,8 @@ Package managers:
 
 ## Building from Source
 
+For Android/Google TV and Amazon Fire OS APK builds, the Amazon Vega OS VPKG target, the Samsung Tizen port, the native Roku SceneGraph port, and detailed model-specific installation instructions, see [TV_INSTALL.md](TV_INSTALL.md). Vega-specific build automation is in [vega-os/README.md](vega-os/README.md), and Roku-specific source and developer-mode guidance is in [roku/README.md](roku/README.md).
+
 ### Prerequisites
 - Flutter SDK 3.38.4+
 - A Plex account or Jellyfin server with user credentials

@@ -1,0 +1,12 @@
+{
+  "name": "plezy-roku",
+  "version": "2.10.0-roku.2",
+  "private": true,
+  "description": "Static validation tools for the native Plezy Roku channel",
+  "scripts": {
+    "check": "bsc --project bsconfig.json && node tests/validate-package.mjs"
+  },
+  "devDependencies": {
+    "brighterscript": "0.73.0"
+  }
+}

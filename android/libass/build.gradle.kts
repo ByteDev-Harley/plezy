@@ -19,6 +19,11 @@ android {
   defaultConfig {
     minSdk = 21
     consumerProguardFiles("consumer-rules.pro")
+    if (System.getenv("AMAZON") != null) {
+      ndk {
+        abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+      }
+    }
     externalNativeBuild {
       cmake {
         // HarfBuzz pulls in C++, so the JNI library must use the shared STL that

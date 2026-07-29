@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920,user-scalable=no">
+  <title>Plezy Samsung TV layout preview</title>
+  <style>
+    html, body, iframe { width: 1920px; height: 1080px; margin: 0; border: 0; overflow: hidden; background: #07080b; }
+  </style>
+</head>
+<body>
+  <iframe id="preview" src="../index.html" title="Samsung TV preview"></iframe>
+  <script>
+    document.getElementById("preview").addEventListener("load", function () {
+      var frame = this.contentWindow;
+      var doc = frame.document;
+      var screens = doc.querySelectorAll("section.screen");
+      Array.prototype.forEach.call(screens, function (screen) { screen.classList.add("hidden"); });
+
+      if (location.search.indexOf("show") !== -1 || location.search.indexOf("season") !== -1) {
+        var seasonMode = location.search.indexOf("season") !== -1;
+        var detail = doc.getElementById("detail-screen");
+        detail.classList.remove("hidden");
+        doc.getElementById("detail-eyebrow").textContent = seasonMode ? "SEASON" : "TV SHOW · 2026";
+        doc.getElementById("detail-title").textContent = seasonMode ? "Season 1" : "The Living Room Test";
+        doc.getElementById("detail-meta").textContent = seasonMode ? "10 episodes" : "TV-14 · 3 seasons · 4K";
+        doc.getElementById("detail-summary").textContent = seasonMode
+          ? "Select an episode to start playing immediately."
+          : "Selecting a show now opens its seasons automatically, with one-click access to the first unwatched or resumable episode.";
+        var play = doc.getElementById("detail-play");
+        if (seasonMode) play.classList.add("hidden");
+        else play.textContent = "▶ Play first episode";
+        var children = doc.getElementById("detail-children");
+        var childCards = seasonMode
+          ? [
+              card("Pilot", "S1 E1", true, 0),
+              card("Crossing Paths", "S1 E2", true, 0),
+              card("The Signal", "S1 E3", true, 35),
+              card("Home Again", "S1 E4", true, 0)
+            ].join("")
+          : [
+              card("Season 1", "10 episodes", false, 0),
+              card("Season 2", "10 episodes", false, 0),
+              card("Season 3", "8 episodes", false, 0)
+            ].join("");
+        children.innerHTML = '<section class="shelf"><h2>' + (seasonMode ? "Episodes" : "Seasons") +
+          '</h2><div class="card-row">' + childCards + '</div></section>';
+        if (seasonMode) children.querySelector(".media-card").focus();
+        else play.focus();
+        return;
+      }
+
+      var browse = doc.getElementById("browse-screen");
+      browse.classList.remove("hidden");
+      doc.getElementById("connection-badge").textContent = "Plex · Living Room Server";
+      doc.getElementById("page-eyebrow").textContent = "Living Room Server";
+      doc.getElementById("page-title").textContent = "Home";
+      doc.getElementById("clock").textContent = "8:42 PM";
+
+      if (location.search.indexOf("libraries") !== -1) {
+        doc.getElementById("page-title").textContent = "Libraries";
+        doc.getElementById("content-body").innerHTML =
+          '<section class="server-picker"><h2>Plex Servers</h2>' +
+          '<div class="server-group"><h3>Your Server</h3><div class="server-grid">' +
+          '<button class="server-option is-current" data-focusable="true"><strong>Living Room Server</strong><small>Connected</small></button>' +
+          '</div></div><div class="server-group"><h3>Shared With You</h3><div class="server-grid">' +
+          '<button class="server-option" data-focusable="true"><strong>Family Plex</strong><small>Shared</small></button>' +
+          '<button class="server-option" data-focusable="true"><strong>Friends Media</strong><small>Shared</small></button>' +
+          '</div></div></section><section class="library-list"><h2>Libraries</h2>' +
+          '<div class="library-grid"><button class="library-button" data-focusable="true"><strong>Movies</strong><small>movie</small></button>' +
+          '<button class="library-button" data-focusable="true"><strong>TV Shows</strong><small>show</small></button></div></section>';
+        doc.querySelector(".server-option").focus();
+        return;
+      }
+
+      function card(title, subtitle, wide, progress) {
+        return '<button class="media-card' + (wide ? ' media-card--wide' : '') + '" data-focusable="true">' +
+          '<div class="media-art"><div class="media-placeholder">▶</div>' +
+          (progress ? '<div class="media-progress"><div style="width:' + progress + '%"></div></div>' : '') +
+          '</div><div class="media-copy"><span class="media-title">' + title + '</span>' +
+          '<span class="media-subtitle">' + subtitle + '</span></div></button>';
+      }
+
+      var posters = [
+        card("Distant Worlds", "2026", false, 42),
+        card("The Long Weekend", "2025", false, 0),
+        card("Northern Lights", "2024", false, 0),
+        card("The Last Station", "2026", false, 76),
+        card("Ocean House", "2023", false, 0),
+        card("After Midnight", "2025", false, 0)
+      ].join("");
+      var episodes = [
+        card("A New Beginning", "Example Series · S1 E1", true, 18),
+        card("Crossing Paths", "Example Series · S1 E2", true, 0),
+        card("The Signal", "Another Series · S3 E4", true, 63),
+        card("Home Again", "Another Series · S3 E5", true, 0)
+      ].join("");
+      doc.getElementById("content-body").innerHTML =
+        '<section class="shelf"><h2>Recently Added</h2><div class="card-row">' + posters + '</div></section>' +
+        '<section class="shelf"><h2>Continue Watching</h2><div class="card-row">' + episodes + '</div></section>';
+      var firstCard = doc.querySelector(".media-card");
+      var firstPlaceholder = firstCard.querySelector(".media-placeholder");
+      var firstImage = doc.createElement("img");
+      firstImage.src = "../icon.png";
+      firstImage.alt = "Poster artwork focus-layer test";
+      firstPlaceholder.parentNode.replaceChild(firstImage, firstPlaceholder);
+      firstCard.focus();
+    });
+  </script>
+</body>
+</html>
