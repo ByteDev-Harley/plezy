@@ -4,7 +4,7 @@
   "private": true,
   "description": "Plezy TV client for Samsung Tizen televisions",
   "scripts": {
-    "check": "node --check js/api.js && node --check js/app.js && node tools/validate-package.js",
+    "check": "node --check js/api.js && node --check js/navigation.js && node --check js/app.js && node tools/validate-package.js",
     "test": "node --test tests/*.test.js"
   },
   "license": "GPL-3.0"

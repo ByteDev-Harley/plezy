@@ -19,6 +19,7 @@ var config = read("config.xml");
 var index = read("index.html");
 var css = read("css/app.css");
 var api = read("js/api.js");
+var navigation = read("js/navigation.js");
 var app = read("js/app.js");
 var projectYaml = read("tizen_web_project.yaml");
 
@@ -49,8 +50,9 @@ localReferences.forEach(function (reference) {
 if (!fs.existsSync(path.join(root, "icon.png"))) failures.push("Missing Samsung application icon: icon.png");
 if (/<script(?![^>]*\bsrc=)[^>]*>/i.test(index)) failures.push("Inline scripts violate the package CSP.");
 if (/\son[a-z]+\s*=/i.test(index)) failures.push("Inline event handlers violate the package CSP.");
-if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(api + app)) failures.push("Dynamic code execution is not allowed.");
+if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(api + navigation + app)) failures.push("Dynamic code execution is not allowed.");
 if (index.indexOf('content="width=1920,user-scalable=no"') === -1) failures.push("The Samsung viewport must use the 1920px TV canvas.");
+if (index.indexOf('src="js/navigation.js"') === -1 || index.indexOf('src="js/navigation.js"') > index.indexOf('src="js/app.js"')) failures.push("The navigation runtime must load before app.js.");
 if (/\binset\s*:/.test(css)) failures.push("CSS inset shorthand is not supported by the Tizen 6 Chromium engine.");
 if (css.indexOf("width: 1920px") === -1 || css.indexOf("height: 1080px") === -1) failures.push("The stylesheet must define a 1920x1080 TV canvas.");
 if (api.indexOf('optional("/library/onDeck")') === -1 || api.indexOf('optional("/library/recentlyAdded")') === -1) failures.push("Plex home fallbacks are missing.");
@@ -62,12 +64,16 @@ if (api.indexOf("getShowUpNext") === -1 || api.indexOf("chooseUpNext") === -1) f
 if (app.indexOf('data-direct-play="true"') === -1 || app.indexOf("loadChildren(detail)") === -1) failures.push("Direct playback or automatic child loading is missing.");
 if (app.indexOf("state.client.getShowUpNext(item.id)") === -1) failures.push("Direct home-screen show playback is missing.");
 if (app.indexOf("function handleHardwareBack") === -1 || app.indexOf("lastBackAt") === -1 || app.indexOf("suppressExitUntil") === -1) failures.push("Samsung duplicate Back-event protection is missing.");
-if (app.indexOf('behavior: "auto"') === -1 || css.indexOf("scroll-behavior: auto") === -1) failures.push("Samsung focus scrolling must remain immediate.");
+if (navigation.indexOf("preventScroll: true") === -1 || navigation.indexOf("scrollIntoView") !== -1 || css.indexOf("scroll-behavior: auto") === -1) failures.push("Samsung focus scrolling must remain immediate and conditional.");
 if (css.indexOf(".media-art::after") === -1 || css.indexOf("border: 4px solid transparent") === -1 || css.indexOf("scale(1.035)") === -1) failures.push("Samsung thumbnail focus styling is missing.");
 if (app.indexOf("timelineOffsetMs") === -1 || app.indexOf("resumeSeekPending") === -1) failures.push("Samsung resumed-playback timeline correction is missing.");
 if (app.indexOf("plexServerGroupHtml") === -1 || app.indexOf("data-server-switch") === -1 || api.indexOf("accountToken") === -1 || api.indexOf("orderPlexServers") === -1) failures.push("Plex multi-server library switching is missing.");
 if (app.indexOf("libraryVisibleCount") === -1 || app.indexOf("limit: 12") === -1) failures.push("Samsung DOM rendering limits are missing.");
+if (app.indexOf("lastNavigationAt") !== -1 || app.indexOf("event.repeat") === -1 || navigation.indexOf("RepeatGate") === -1) failures.push("Samsung held-key repeat handling is missing.");
+if (app.indexOf("data-artwork-src") === -1 || navigation.indexOf("artworkLookAhead") === -1) failures.push("Samsung artwork look-ahead loading is missing.");
+if (app.indexOf("keydown-to-focus") === -1 || app.indexOf("keydown-to-next-paint") === -1 || app.indexOf("performanceDiagnosticsEnabled") === -1) failures.push("Opt-in Samsung navigation diagnostics are missing.");
 if (projectYaml.indexOf("profile: tv-samsung") === -1 || projectYaml.indexOf('api_version: "6.0"') === -1) failures.push("VS Code Tizen TV project metadata is invalid.");
+if (projectYaml.indexOf("  - js/navigation.js") === -1) failures.push("The navigation runtime must be included in the Tizen project.");
 if (projectYaml.indexOf("  - tests/*") === -1 || projectYaml.indexOf("  - tools/*") === -1 || projectYaml.indexOf("  - tizen_web_project.yaml") === -1) failures.push("Development-only files must be excluded from the WGT.");
 
 var packageMatch = config.match(/<tizen:application\s+id="([^"]+)"\s+package="([^"]+)"/);

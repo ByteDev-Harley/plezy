@@ -2,6 +2,13 @@
   "use strict";
 
   var Api = window.PlezyTVApi;
+  var Navigation = window.PlezyTVNavigation;
+  var requestFrame = window.requestAnimationFrame
+    ? function (callback) { return window.requestAnimationFrame(callback); }
+    : function (callback) { return setTimeout(function () { callback(Date.now()); }, 16); };
+  var cancelFrame = window.cancelAnimationFrame
+    ? function (handle) { window.cancelAnimationFrame(handle); }
+    : clearTimeout;
   var state = {
     client: null,
     screen: "loading",
@@ -9,6 +16,9 @@
     libraries: [],
     libraryItems: [],
     libraryVisibleCount: 0,
+    searchItems: [],
+    searchVisibleCount: 0,
+    contentRevision: 0,
     items: {},
     currentDetail: null,
     currentPlayTarget: null,
@@ -18,7 +28,11 @@
     pinStartedAt: 0,
     toastTimer: null,
     player: null,
-    lastNavigationAt: 0,
+    navigation: null,
+    navigationFrame: 0,
+    pendingFocus: null,
+    repeatGate: null,
+    performanceDiagnostics: null,
     lastBackAt: 0,
     suppressExitUntil: 0
   };
@@ -54,16 +68,35 @@
   function show(element) { if (element) element.classList.remove("hidden"); }
   function hide(element) { if (element) element.classList.add("hidden"); }
 
-  function focusFirst(root) {
-    setTimeout(function () {
-      var scope = root || document;
-      var target = scope.querySelector('[data-autofocus="true"][data-focusable="true"]:not([disabled])') ||
-        scope.querySelector('[data-focusable="true"]:not([disabled])');
-      if (target) {
-        target.focus();
-        reveal(target);
+  function activeScreen() {
+    return byId(state.screen + "-screen");
+  }
+
+  function scheduleNavigationRefresh(focusRequest) {
+    if (!state.navigation) return;
+    if (focusRequest) state.pendingFocus = focusRequest;
+    if (state.navigationFrame) cancelFrame(state.navigationFrame);
+    var scheduledScreen = state.screen;
+    state.navigationFrame = requestFrame(function () {
+      state.navigationFrame = 0;
+      if (scheduledScreen !== state.screen) return;
+      var screen = activeScreen();
+      if (!screen) return;
+      state.navigation.refresh(screen);
+      var request = state.pendingFocus;
+      state.pendingFocus = null;
+      if (request) {
+        var target = state.navigation.resolveFocus(request);
+        if (target) state.navigation.focus(target);
       }
-    }, 30);
+    });
+  }
+
+  function focusFirst(root) {
+    scheduleNavigationRefresh({
+      scope: root || activeScreen(),
+      preferAutofocus: true
+    });
   }
 
   function showScreen(name) {
@@ -119,6 +152,7 @@
 
   function setBody(html) {
     byId("content-body").innerHTML = html;
+    scheduleNavigationRefresh();
   }
 
   function bodyLoading(message) {
@@ -154,7 +188,7 @@
     var key = itemKey(item);
     var shouldPlay = item.playable && (directPlayable || item.type === "episode" || item.type === "clip");
     var art = item.thumb
-      ? '<img src="' + escapeHtml(item.thumb) + '" alt="" decoding="async" loading="lazy">'
+      ? '<img data-artwork-src="' + escapeHtml(item.thumb) + '" alt="" decoding="async">'
       : '<div class="media-placeholder">▶</div>';
     return '<button class="media-card' + (wide ? " media-card--wide" : "") +
       '" data-focusable="true" data-item="' + escapeHtml(key) + '"' +
@@ -203,12 +237,12 @@
       pageAnchor: pageAnchor
     }));
     if (pageAnchor) {
-      var anchor = byId("content-body").querySelector('[data-page-anchor="true"]');
-      if (anchor) {
-        anchor.focus();
-        reveal(anchor);
-        return;
-      }
+      scheduleNavigationRefresh({
+        scope: byId("content-body"),
+        attributes: { "data-page-anchor": "true" },
+        preferAutofocus: false
+      });
+      return;
     }
     focusFirst(byId("content-body"));
   }
@@ -224,10 +258,11 @@
 
   function routeHome() {
     setActiveRoute("home");
+    var revision = ++state.contentRevision;
     setPage("Home", serverName());
     bodyLoading("Loading your home screen…");
     state.client.getHome().then(function (shelves) {
-      if (state.route !== "home") return;
+      if (state.route !== "home" || revision !== state.contentRevision) return;
       var visibleShelves = shelves.slice(0, 8);
       setBody(visibleShelves.length
         ? visibleShelves.map(function (shelf) {
@@ -235,7 +270,9 @@
         }).join("")
         : '<div class="empty-state">Your server did not return any home-screen items.</div>');
       focusFirst(byId("content-body"));
-    }).catch(function (error) { bodyError(error, "home"); });
+    }).catch(function (error) {
+      if (state.route === "home" && revision === state.contentRevision) bodyError(error, "home");
+    });
   }
 
   function ensureCurrentPlexServer() {
@@ -290,6 +327,7 @@
 
   function routeLibraries() {
     setActiveRoute("libraries");
+    var revision = ++state.contentRevision;
     setPage("Libraries", serverName());
     bodyLoading("Loading libraries and servers…");
     var serversPromise = providerName() === "Plex"
@@ -299,22 +337,28 @@
       state.libraries = results[0];
       if (providerName() === "Plex" && results[1].length) state.pendingServers = results[1];
       if (providerName() === "Plex") Api.saveSession(state.client.toSession());
-      if (state.route !== "libraries") return;
+      if (state.route !== "libraries" || revision !== state.contentRevision) return;
       renderLibrariesPage(state.libraries);
-    }).catch(function (error) { bodyError(error, "libraries"); });
+    }).catch(function (error) {
+      if (state.route === "libraries" && revision === state.contentRevision) bodyError(error, "libraries");
+    });
   }
 
   function switchPlexServer(index) {
     var server = state.pendingServers[index];
     if (!server || providerName() !== "Plex") return;
     if (state.client.server && server.id === state.client.server.id) return;
+    var revision = ++state.contentRevision;
     var previousSession = state.client.toSession();
     setLoading("Connecting to " + server.name + "…");
     state.client.connect(server);
     state.client.getLibraries().then(function (libraries) {
+      if (revision !== state.contentRevision) return;
       state.libraries = libraries;
       state.libraryItems = [];
       state.libraryVisibleCount = 0;
+      state.searchItems = [];
+      state.searchVisibleCount = 0;
       state.items = {};
       Api.saveSession(state.client.toSession());
       showScreen("browse");
@@ -334,17 +378,22 @@
   function openLibrary(index) {
     var library = state.libraries[index];
     if (!library) return;
+    var revision = ++state.contentRevision;
     setPage(library.title, "Library");
     bodyLoading("Loading " + library.title + "…");
     state.client.getLibraryItems(library.id).then(function (items) {
+      if (state.route !== "libraries" || revision !== state.contentRevision) return;
       state.libraryItems = items;
       state.libraryVisibleCount = 60;
       renderLibraryItems();
-    }).catch(function (error) { bodyError(error, "libraries"); });
+    }).catch(function (error) {
+      if (state.route === "libraries" && revision === state.contentRevision) bodyError(error, "libraries");
+    });
   }
 
   function routeSearch() {
     setActiveRoute("search");
+    state.contentRevision += 1;
     setPage("Search", serverName());
     setBody(
       '<form id="search-form" class="search-box">' +
@@ -355,24 +404,49 @@
     focusFirst(byId("content-body"));
   }
 
+  function renderSearchItems(pageAnchor) {
+    var results = byId("search-results");
+    if (!results) return;
+    results.className = "";
+    results.innerHTML = gridHtml(state.searchItems, {
+      limit: state.searchVisibleCount,
+      pageAnchor: pageAnchor
+    });
+    if (pageAnchor) {
+      scheduleNavigationRefresh({
+        scope: results,
+        attributes: { "data-page-anchor": "true" },
+        preferAutofocus: false
+      });
+    } else {
+      focusFirst(results);
+    }
+  }
+
   function runSearch(term) {
     term = String(term || "").trim();
     if (!term) return;
+    var revision = ++state.contentRevision;
     var results = byId("search-results");
     results.className = "empty-state";
     results.innerHTML = '<div class="spinner"></div><p>Searching…</p>';
+    scheduleNavigationRefresh();
     state.client.search(term).then(function (items) {
-      results.className = "";
-      results.innerHTML = gridHtml(items, { limit: 60 });
-      focusFirst(results);
+      if (state.route !== "search" || revision !== state.contentRevision) return;
+      state.searchItems = items;
+      state.searchVisibleCount = 60;
+      renderSearchItems();
     }).catch(function (error) {
+      if (state.route !== "search" || revision !== state.contentRevision) return;
       results.className = "error-state";
       results.textContent = friendlyError(error);
+      scheduleNavigationRefresh();
     });
   }
 
   function routeSettings() {
     setActiveRoute("settings");
+    state.contentRevision += 1;
     setPage("Settings", providerName());
     var serverUrl = state.client.baseUrl || "";
     setBody(
@@ -467,11 +541,14 @@
           show(playButton);
           playButton.disabled = false;
           playButton.textContent = playButtonLabel(nextEpisode, true);
-          if (document.activeElement && document.activeElement.classList.contains("detail-back")) {
-            playButton.focus();
-          }
+          scheduleNavigationRefresh(document.activeElement && document.activeElement.classList.contains("detail-back")
+            ? { scope: byId("detail-screen"), element: playButton, preferAutofocus: false }
+            : null);
         }).catch(function () {
-          if (state.currentDetail && state.currentDetail.id === detail.id) hide(playButton);
+          if (state.currentDetail && state.currentDetail.id === detail.id) {
+            hide(playButton);
+            scheduleNavigationRefresh();
+          }
         });
       }
     }).catch(function (error) {
@@ -487,6 +564,7 @@
     var container = byId("detail-children");
     container.innerHTML = '<div class="children-loading"><div class="spinner"></div><p>Loading ' +
       (detail.type === "show" ? "seasons" : "episodes") + '…</p></div>';
+    scheduleNavigationRefresh();
     state.client.getChildren(detail.id, detail).then(function (items) {
       if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
       container.innerHTML = items.length
@@ -496,9 +574,11 @@
         })
         : '<div class="empty-state">No episodes were found.</div>';
       if (detail.type === "season" || !state.currentPlayTarget) focusFirst(container);
+      else scheduleNavigationRefresh();
     }).catch(function (error) {
       if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
       container.innerHTML = '<div class="error-state">' + escapeHtml(friendlyError(error)) + "</div>";
+      scheduleNavigationRefresh();
     });
   }
 
@@ -629,6 +709,9 @@
     state.libraries = [];
     state.libraryItems = [];
     state.libraryVisibleCount = 0;
+    state.searchItems = [];
+    state.searchVisibleCount = 0;
+    state.contentRevision += 1;
     state.currentDetail = null;
     state.currentPlayTarget = null;
     state.detailStack = [];
@@ -715,21 +798,16 @@
   };
 
   PlayerController.prototype.restoreScreen = function () {
-    var self = this;
     var name = this.returnScreen === "browse" ? "browse" : "detail";
     showScreen(name);
-    setTimeout(function () {
-      var scope = byId(name + "-screen");
-      var match = all('[data-focusable="true"]', scope).filter(function (element) {
-        if (self.returnFocusItem) return element.getAttribute("data-item") === self.returnFocusItem;
-        if (self.returnFocusAction) return element.getAttribute("data-action") === self.returnFocusAction;
-        return false;
-      })[0];
-      if (match) {
-        match.focus();
-        reveal(match);
-      }
-    }, 35);
+    var attributes = null;
+    if (this.returnFocusItem) attributes = { "data-item": this.returnFocusItem };
+    else if (this.returnFocusAction) attributes = { "data-action": this.returnFocusAction };
+    scheduleNavigationRefresh({
+      scope: byId(name + "-screen"),
+      attributes: attributes,
+      preferAutofocus: !attributes
+    });
   };
 
   PlayerController.prototype._open = function (url) {
@@ -905,121 +983,8 @@
     this.chromeTimer = setTimeout(function () { chrome.classList.add("is-hidden"); }, 4500);
   };
 
-  function reveal(element) {
-    if (!element || !element.scrollIntoView) return;
-    element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
-  }
-
-  function focusElement(element) {
-    if (!element) return false;
-    element.focus();
-    reveal(element);
-    return true;
-  }
-
-  function focusWithinContainer(active, direction) {
-    var row = closest(active, ".card-row");
-    if (row) {
-      var rowItems = all('[data-focusable="true"]:not([disabled])', row);
-      var rowIndex = rowItems.indexOf(active);
-      if (direction === "left") {
-        if (rowIndex > 0) return focusElement(rowItems[rowIndex - 1]);
-        return false;
-      }
-      if (direction === "right") {
-        if (rowIndex < rowItems.length - 1) return focusElement(rowItems[rowIndex + 1]);
-        return true;
-      }
-      if (direction === "up" || direction === "down") {
-        var rowScope = closest(row, ".content-body") || closest(row, ".detail-children") || byId(state.screen + "-screen");
-        var rows = all(".card-row", rowScope);
-        var adjacentRow = rows[rows.indexOf(row) + (direction === "up" ? -1 : 1)];
-        if (adjacentRow) {
-          var adjacentItems = all('[data-focusable="true"]:not([disabled])', adjacentRow);
-          return focusElement(adjacentItems[Math.min(rowIndex, adjacentItems.length - 1)]);
-        }
-        if (direction === "down") return true;
-      }
-    }
-    var grid = closest(active, ".library-grid");
-    if (grid) {
-      var gridItems = all('[data-focusable="true"]:not([disabled])', grid);
-      var gridIndex = gridItems.indexOf(active);
-      if (direction === "left") {
-        if (gridIndex % 6 !== 0) return focusElement(gridItems[gridIndex - 1]);
-        return false;
-      }
-      if (direction === "right") {
-        if (gridIndex % 6 !== 5 && gridIndex < gridItems.length - 1) return focusElement(gridItems[gridIndex + 1]);
-        return true;
-      }
-      if (direction === "up") {
-        if (gridIndex >= 6) return focusElement(gridItems[gridIndex - 6]);
-        return false;
-      }
-      if (direction === "down") {
-        if (gridIndex + 6 < gridItems.length) return focusElement(gridItems[gridIndex + 6]);
-        return true;
-      }
-    }
-    var nav = closest(active, "#nav-list");
-    if (nav && (direction === "up" || direction === "down")) {
-      var navItems = all('[data-focusable="true"]:not([disabled])', nav);
-      var navIndex = navItems.indexOf(active);
-      return focusElement(navItems[navIndex + (direction === "up" ? -1 : 1)]);
-    }
-    var serverGrid = closest(active, ".server-grid");
-    if (serverGrid) {
-      var serverItems = all('[data-focusable="true"]:not([disabled])', serverGrid);
-      var serverIndex = serverItems.indexOf(active);
-      if (direction === "left" && serverIndex % 3 !== 0) return focusElement(serverItems[serverIndex - 1]);
-      if (direction === "right" && serverIndex % 3 !== 2 && serverIndex < serverItems.length - 1) {
-        return focusElement(serverItems[serverIndex + 1]);
-      }
-      if (direction === "up" && serverIndex >= 3) return focusElement(serverItems[serverIndex - 3]);
-      if (direction === "down" && serverIndex + 3 < serverItems.length) return focusElement(serverItems[serverIndex + 3]);
-    }
-    return false;
-  }
-
   function moveFocus(direction) {
-    var active = document.activeElement;
-    if (active && focusWithinContainer(active, direction)) return;
-    var screen = byId(state.screen + "-screen") || document;
-    var candidates = all('[data-focusable="true"]:not([disabled])', screen).filter(function (element) {
-      return element.offsetParent !== null && element !== active;
-    });
-    if (!active || active === document.body) {
-      focusFirst();
-      return;
-    }
-    var from = active.getBoundingClientRect();
-    var fx = from.left + from.width / 2;
-    var fy = from.top + from.height / 2;
-    var best = null;
-    var bestScore = Infinity;
-    candidates.forEach(function (candidate) {
-      var rect = candidate.getBoundingClientRect();
-      var x = rect.left + rect.width / 2;
-      var y = rect.top + rect.height / 2;
-      var dx = x - fx;
-      var dy = y - fy;
-      var primary;
-      var secondary;
-      if (direction === "left" && dx < -4) { primary = -dx; secondary = Math.abs(dy); }
-      else if (direction === "right" && dx > 4) { primary = dx; secondary = Math.abs(dy); }
-      else if (direction === "up" && dy < -4) { primary = -dy; secondary = Math.abs(dx); }
-      else if (direction === "down" && dy > 4) { primary = dy; secondary = Math.abs(dx); }
-      else return;
-      var score = primary + secondary * 2.4;
-      if (score < bestScore) {
-        bestScore = score;
-        best = candidate;
-      }
-    });
-    if (best) {
-      focusElement(best);
-    }
+    return state.navigation ? state.navigation.move(direction) : false;
   }
 
   function exitApplication() {
@@ -1072,8 +1037,69 @@
     goBack();
   }
 
+  function performanceNow() {
+    return window.performance && window.performance.now ? window.performance.now() : Date.now();
+  }
+
+  function performanceDiagnosticsEnabled() {
+    if (window.__PLEZY_TV_PERFORMANCE__ === true) return true;
+    try {
+      if (window.localStorage.getItem("plezy.tv.performanceDiagnostics") === "1") return true;
+    } catch (_) { /* Storage can be unavailable in browser preview privacy modes. */ }
+    return /(?:\?|&)plezyPerf=1(?:&|$)/.test(window.location && window.location.search || "");
+  }
+
+  function logRuntimeDimensions() {
+    if (!state.performanceDiagnostics) return;
+    var display = window.screen || {};
+    console.log("[PlezyTV performance] runtime-dimensions", {
+      logicalCanvas: "1920x1080",
+      viewport: String(window.innerWidth || 0) + "x" + String(window.innerHeight || 0),
+      display: String(display.width || 0) + "x" + String(display.height || 0),
+      devicePixelRatio: window.devicePixelRatio || 1,
+      avPlayDisplayRect: "0,0,1920,1080"
+    });
+  }
+
+  function recordNavigationPerformance(startedAt, direction, moved, repeat) {
+    if (!state.performanceDiagnostics) return;
+    console.log("[PlezyTV performance] keydown-to-focus", {
+      direction: direction,
+      repeat: repeat,
+      moved: moved,
+      durationMs: Math.round((performanceNow() - startedAt) * 10) / 10
+    });
+    requestFrame(function () {
+      setTimeout(function () {
+        console.log("[PlezyTV performance] keydown-to-next-paint", {
+          direction: direction,
+          repeat: repeat,
+          moved: moved,
+          durationMs: Math.round((performanceNow() - startedAt) * 10) / 10
+        });
+      }, 0);
+    });
+  }
+
+  function directionForKeyCode(code) {
+    if (code === 37) return "left";
+    if (code === 38) return "up";
+    if (code === 39) return "right";
+    if (code === 40) return "down";
+    return "";
+  }
+
   function handleKey(event) {
     var code = event.keyCode;
+    var direction = directionForKeyCode(code);
+    var repeatResult = null;
+    var diagnosticStartedAt = 0;
+    if (direction) {
+      event.preventDefault();
+      repeatResult = state.repeatGate.accept(code, event.repeat);
+      if (!repeatResult.accepted) return;
+      if (state.performanceDiagnostics) diagnosticStartedAt = performanceNow();
+    }
     if (state.screen === "player") {
       if ([13, 19, 415, 10252].indexOf(code) !== -1) state.player.toggle();
       else if (code === 37 || code === 412) state.player.seek(-30000);
@@ -1081,22 +1107,21 @@
       else if (code === 10009 || code === 27) handleHardwareBack();
       else if (code === 413) goBack();
       else state.player.showChrome();
-      event.preventDefault();
+      if (!direction) event.preventDefault();
+      if (direction) recordNavigationPerformance(diagnosticStartedAt, direction, true, repeatResult.repeat);
       return;
     }
-    if ([37, 38, 39, 40].indexOf(code) !== -1) {
-      var now = Date.now();
-      if (now - state.lastNavigationAt < 45) {
-        event.preventDefault();
-        return;
-      }
-      state.lastNavigationAt = now;
+    if (direction) {
+      var moved = moveFocus(direction);
+      recordNavigationPerformance(diagnosticStartedAt, direction, moved, repeatResult.repeat);
     }
-    if (code === 37) { moveFocus("left"); event.preventDefault(); }
-    else if (code === 38) { moveFocus("up"); event.preventDefault(); }
-    else if (code === 39) { moveFocus("right"); event.preventDefault(); }
-    else if (code === 40) { moveFocus("down"); event.preventDefault(); }
     else if (code === 10009 || code === 27) { handleHardwareBack(); event.preventDefault(); }
+  }
+
+  function handleKeyUp(event) {
+    if (!directionForKeyCode(event.keyCode)) return;
+    event.preventDefault();
+    state.repeatGate.release(event.keyCode);
   }
 
   function registerRemoteKeys() {
@@ -1111,6 +1136,8 @@
 
   function bindEvents() {
     document.addEventListener("keydown", handleKey);
+    document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", function () { state.repeatGate.releaseAll(); });
     document.addEventListener("tizenhwkey", function (event) {
       if (event.keyName === "back") {
         handleHardwareBack();
@@ -1134,9 +1161,15 @@
       if (action === "back") goBack();
       if (action === "sign-out") signOut();
       if (action === "load-more") {
-        var nextItem = state.libraryItems[state.libraryVisibleCount];
-        state.libraryVisibleCount += 60;
-        renderLibraryItems(nextItem ? itemKey(nextItem) : "");
+        if (state.route === "search") {
+          var nextSearchItem = state.searchItems[state.searchVisibleCount];
+          state.searchVisibleCount += 60;
+          renderSearchItems(nextSearchItem ? itemKey(nextSearchItem) : "");
+        } else {
+          var nextItem = state.libraryItems[state.libraryVisibleCount];
+          state.libraryVisibleCount += 60;
+          renderLibraryItems(nextItem ? itemKey(nextItem) : "");
+        }
       }
     });
     byId("plex-connect").addEventListener("click", beginPlexLink);
@@ -1160,9 +1193,14 @@
   }
 
   function init() {
+    if (!Navigation) throw new Error("Plezy TV navigation module did not load.");
+    state.navigation = new Navigation.NavigationIndex({ document: document, artworkLookAhead: 6 });
+    state.repeatGate = new Navigation.RepeatGate(85);
+    state.performanceDiagnostics = performanceDiagnosticsEnabled();
     state.player = new PlayerController();
     bindEvents();
     registerRemoteKeys();
+    logRuntimeDimensions();
     updateClock();
     setInterval(updateClock, 30000);
     restoreSession();

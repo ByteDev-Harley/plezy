@@ -29,6 +29,8 @@ Push-Location $project
 try {
   & node --check js/api.js
   if ($LASTEXITCODE -ne 0) { throw "api.js syntax validation failed." }
+  & node --check js/navigation.js
+  if ($LASTEXITCODE -ne 0) { throw "navigation.js syntax validation failed." }
   & node --check js/app.js
   if ($LASTEXITCODE -ne 0) { throw "app.js syntax validation failed." }
   & node tools/validate-package.js

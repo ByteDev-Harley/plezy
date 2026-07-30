@@ -6,6 +6,8 @@ Version 2.10.2 adds Tizen 6-compatible full-screen positioning, resilient Plex h
 
 Version 2.10.3 streamlines TV navigation: home and episode cards play directly, shows automatically display seasons and offer Play First/Next/Resume Episode, seasons automatically display episodes, and episode selection starts playback without an extra detail page. D-pad navigation avoids smooth scrolling and expensive focus animation, home shelves render bounded card sets, and large libraries load 60 cards at a time.
 
+The navigation runtime builds its focus graph after each render, keeps geometry work out of D-pad key events, and explicitly loads artwork for the visible cards plus a small look-ahead window. The application and Samsung AVPlay display rectangle intentionally remain on the 1920×1080 logical TV canvas.
+
 Runtime files are `config.xml`, `index.html`, `icon.png`, `css/app.css`, `js/api.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
 
 ## Local checks
@@ -16,6 +18,22 @@ npm test
 ```
 
 No npm dependencies are installed or shipped. The test suite uses Node's built-in test runner.
+
+## Navigation performance diagnostics
+
+Diagnostics are off by default. To enable them for a Web Inspector session, run the following in the console and reload the app:
+
+```javascript
+localStorage.setItem("plezy.tv.performanceDiagnostics", "1");
+location.reload();
+```
+
+The console then reports the runtime viewport/display dimensions and, for each accepted D-pad key, keydown-to-focus and keydown-to-next-paint timing. Disable the diagnostic after testing with:
+
+```javascript
+localStorage.removeItem("plezy.tv.performanceDiagnostics");
+location.reload();
+```
 
 ## Package
 
