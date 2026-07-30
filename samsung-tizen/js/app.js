@@ -3,6 +3,7 @@
 
   var Api = window.PlezyTVApi;
   var Navigation = window.PlezyTVNavigation;
+  var Profiles = window.PlezyTVProfiles;
   var requestFrame = window.requestAnimationFrame
     ? function (callback) { return window.requestAnimationFrame(callback); }
     : function (callback) { return setTimeout(function () { callback(Date.now()); }, 16); };
@@ -11,6 +12,25 @@
     : clearTimeout;
   var state = {
     client: null,
+    profileStore: null,
+    activeProfile: null,
+    activeBinding: null,
+    setupProfileId: "",
+    setupAccount: null,
+    setupClient: null,
+    setupAccountPersisted: false,
+    setupHomeUsers: [],
+    setupHomeUser: null,
+    setupIdentityToken: "",
+    setupServers: [],
+    setupReturnScreen: "profile-picker",
+    profileFormMode: "create",
+    profileFormTarget: "",
+    confirmAction: null,
+    confirmReturnScreen: "profile-picker",
+    pinResolver: null,
+    pinReturnScreen: "profile-picker",
+    activationRevision: 0,
     screen: "loading",
     route: "home",
     libraries: [],
@@ -126,6 +146,218 @@
       return "Could not reach the server. Check its address, HTTPS certificate, and network access.";
     }
     return error.message || String(error);
+  }
+
+  function profileInitials(name) {
+    var words = String(name || "P").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return "P";
+    return (words[0].charAt(0) + (words.length > 1 ? words[words.length - 1].charAt(0) : "")).toUpperCase();
+  }
+
+  function providerBadges(bindings) {
+    var seen = {};
+    return (bindings || []).map(function (binding) {
+      if (seen[binding.provider]) return "";
+      seen[binding.provider] = true;
+      return '<span class="provider-badge provider-badge--' + escapeHtml(binding.provider) + '">' +
+        escapeHtml(binding.provider) + "</span>";
+    }).join("");
+  }
+
+  function clearMediaNavigationState() {
+    state.contentRevision += 1;
+    state.libraries = [];
+    state.libraryItems = [];
+    state.libraryVisibleCount = 0;
+    state.searchItems = [];
+    state.searchVisibleCount = 0;
+    state.items = {};
+    state.currentDetail = null;
+    state.currentPlayTarget = null;
+    state.detailStack = [];
+    state.pendingServers = [];
+    if (byId("content-body")) byId("content-body").innerHTML = "";
+    if (byId("detail-children")) byId("detail-children").innerHTML = "";
+    if (byId("detail-backdrop")) byId("detail-backdrop").style.backgroundImage = "";
+  }
+
+  function leaveActiveContext() {
+    state.activationRevision += 1;
+    clearInterval(state.pinTimer);
+    if (state.pinResolver) {
+      var resolver = state.pinResolver;
+      state.pinResolver = null;
+      resolver(null);
+    }
+    if (state.player && state.player.teardown) state.player.teardown();
+    clearMediaNavigationState();
+    state.client = null;
+    state.activeProfile = null;
+    state.activeBinding = null;
+  }
+
+  function renderProfilePicker(error, focusProfileId) {
+    var profiles = state.profileStore.getProfiles();
+    if (!profiles.length) {
+      showProfileEditor(null);
+      return;
+    }
+    var list = byId("profile-list");
+    list.innerHTML = profiles.map(function (profile) {
+      var bindings = state.profileStore.getBindings(profile.id);
+      return '<button class="profile-card" data-profile-id="' + escapeHtml(profile.id) +
+        '" data-focusable="true"><span class="profile-avatar">' + escapeHtml(profileInitials(profile.name)) +
+        '</span><strong>' + escapeHtml(profile.name) + '</strong><span class="profile-provider-badges">' +
+        providerBadges(bindings) + "</span><small>" +
+        escapeHtml(bindings.length ? bindings.length + (bindings.length === 1 ? " connection" : " connections") : "Set up a provider") +
+        "</small></button>";
+    }).join("");
+    var errorElement = byId("profile-picker-error");
+    if (error) {
+      errorElement.textContent = friendlyError(error);
+      show(errorElement);
+    } else {
+      errorElement.textContent = "";
+      hide(errorElement);
+    }
+    showScreen("profile-picker");
+    if (focusProfileId) {
+      scheduleNavigationRefresh({
+        scope: byId("profile-picker-screen"),
+        attributes: { "data-profile-id": focusProfileId },
+        preferAutofocus: false
+      });
+    }
+  }
+
+  function openProfilePicker(error, focusProfileId) {
+    leaveActiveContext();
+    renderProfilePicker(error, focusProfileId);
+  }
+
+  function showProfileEditor(profile) {
+    state.profileFormMode = profile ? "rename" : "create";
+    state.profileFormTarget = profile ? profile.id : "";
+    setText("profile-name-eyebrow", profile ? "EDIT PROFILE" : "NEW PROFILE");
+    setText("profile-name-title", profile ? "Rename " + profile.name : "Create a profile");
+    setText("profile-name-submit", profile ? "Save" : "Continue");
+    byId("profile-name-input").value = profile ? profile.name : "";
+    hide(byId("profile-name-error"));
+    showScreen("profile-name");
+  }
+
+  function submitProfileName(event) {
+    event.preventDefault();
+    var name = byId("profile-name-input").value;
+    var errorElement = byId("profile-name-error");
+    try {
+      if (state.profileFormMode === "rename") {
+        state.profileStore.renameProfile(state.profileFormTarget, name);
+        renderProfileManagement(state.profileFormTarget);
+      } else {
+        var profile = state.profileStore.createProfile(name);
+        showProviderSetup(profile.id);
+      }
+    } catch (error) {
+      errorElement.textContent = friendlyError(error);
+      show(errorElement);
+      focusFirst(byId("profile-name-screen"));
+    }
+  }
+
+  function showProviderSetup(profileId, error, returnScreen) {
+    var profile = state.profileStore.getProfile(profileId);
+    if (!profile) {
+      renderProfilePicker(new Error("That profile is no longer available."));
+      return;
+    }
+    state.setupProfileId = profileId;
+    state.setupAccount = null;
+    state.setupClient = null;
+    state.setupAccountPersisted = false;
+    state.setupHomeUsers = [];
+    state.setupHomeUser = null;
+    state.setupIdentityToken = "";
+    state.setupServers = [];
+    state.setupReturnScreen = returnScreen || (state.activeProfile ? "browse" : "profile-picker");
+    setText("provider-setup-title", "Connect " + profile.name);
+    var accounts = state.profileStore.getAccounts("plex");
+    setText("plex-connect", accounts.length ? "Link another Plex account" : "Connect Plex");
+    byId("linked-plex-accounts").innerHTML = accounts.length
+      ? '<p class="eyebrow">LINKED PLEX ACCOUNTS</p>' + accounts.map(function (account) {
+        return '<button class="linked-account-button" data-plex-account-id="' + escapeHtml(account.id) +
+          '" data-focusable="true"><strong>Use ' + escapeHtml(account.name) +
+          '</strong><small>Choose a different Plex Home user or server</small></button>';
+      }).join("")
+      : "";
+    if (error) toast(friendlyError(error), 6500);
+    showScreen("welcome");
+  }
+
+  function renderProfileManagement(focusProfileId) {
+    var profiles = state.profileStore.getProfiles();
+    if (!profiles.length) {
+      showProfileEditor(null);
+      return;
+    }
+    byId("profile-manage-list").innerHTML = profiles.map(function (profile) {
+      var bindings = state.profileStore.getBindings(profile.id);
+      return '<div class="management-row"><div class="management-copy"><strong>' + escapeHtml(profile.name) +
+        '</strong><small>' + escapeHtml(bindings.length + (bindings.length === 1 ? " connection" : " connections")) +
+        '</small></div><button class="small-button" data-profile-rename="' + escapeHtml(profile.id) +
+        '" data-focusable="true">Rename</button><button class="small-button small-button--danger" data-profile-delete="' +
+        escapeHtml(profile.id) + '" data-focusable="true">Delete</button></div>';
+    }).join("");
+    showScreen("profile-manage");
+    if (focusProfileId) {
+      scheduleNavigationRefresh({
+        scope: byId("profile-manage-screen"),
+        attributes: { "data-profile-rename": focusProfileId },
+        preferAutofocus: false
+      });
+    }
+  }
+
+  function showConfirmation(title, message, label, action, returnScreen) {
+    state.confirmAction = action;
+    state.confirmReturnScreen = returnScreen || state.screen;
+    setText("confirm-title", title);
+    setText("confirm-message", message);
+    setText("confirm-button", label || "Confirm");
+    showScreen("confirm");
+  }
+
+  function cancelConfirmation() {
+    var destination = state.confirmReturnScreen;
+    state.confirmAction = null;
+    if (destination === "profile-manage") renderProfileManagement();
+    else if (destination === "browse") {
+      showScreen("browse");
+      routeSettings();
+    } else renderProfilePicker();
+  }
+
+  function confirmAction() {
+    var action = state.confirmAction;
+    state.confirmAction = null;
+    if (action) action();
+  }
+
+  function deleteProfile(profileId) {
+    var profile = state.profileStore.getProfile(profileId);
+    if (!profile) return;
+    showConfirmation(
+      "Delete " + profile.name + "?",
+      "This removes this profile's connections and Jellyfin credentials. A linked Plex account stays available only while another profile uses it.",
+      "Delete profile",
+      function () {
+        if (state.activeProfile && state.activeProfile.id === profileId) leaveActiveContext();
+        state.profileStore.deleteProfile(profileId);
+        if (state.profileStore.getProfiles().length) renderProfileManagement();
+        else showProfileEditor(null);
+      },
+      "profile-manage"
+    );
   }
 
   function providerName() {
@@ -252,7 +484,7 @@
     state.currentPlayTarget = null;
     state.detailStack = [];
     showScreen("browse");
-    setText("connection-badge", providerName() + " · " + serverName());
+    setText("connection-badge", (state.activeProfile ? state.activeProfile.name + " · " : "") + providerName() + " · " + serverName());
     routeHome();
   }
 
@@ -328,19 +560,27 @@
   function routeLibraries() {
     setActiveRoute("libraries");
     var revision = ++state.contentRevision;
+    var client = state.client;
+    var contextRevision = state.activationRevision;
     setPage("Libraries", serverName());
     bodyLoading("Loading libraries and servers…");
     var serversPromise = providerName() === "Plex"
-      ? state.client.getServers().catch(function () { return state.pendingServers; })
+      ? client.getServers().catch(function () { return state.pendingServers; })
       : Promise.resolve([]);
-    Promise.all([state.client.getLibraries(), serversPromise]).then(function (results) {
+    Promise.all([client.getLibraries(), serversPromise]).then(function (results) {
+      if (client !== state.client || contextRevision !== state.activationRevision || state.route !== "libraries" || revision !== state.contentRevision) return;
       state.libraries = results[0];
       if (providerName() === "Plex" && results[1].length) state.pendingServers = results[1];
-      if (providerName() === "Plex") Api.saveSession(state.client.toSession());
-      if (state.route !== "libraries" || revision !== state.contentRevision) return;
+      if (providerName() === "Plex" && state.activeBinding) {
+        state.profileStore.updateBindingSession(state.activeBinding.id, state.client.toSession(), {
+          identityToken: state.client.identityToken,
+          serverId: state.client.server && state.client.server.id
+        });
+        state.activeBinding = state.profileStore.getBinding(state.activeBinding.id);
+      }
       renderLibrariesPage(state.libraries);
     }).catch(function (error) {
-      if (state.route === "libraries" && revision === state.contentRevision) bodyError(error, "libraries");
+      if (client === state.client && contextRevision === state.activationRevision && state.route === "libraries" && revision === state.contentRevision) bodyError(error, "libraries");
     });
   }
 
@@ -348,27 +588,31 @@
     var server = state.pendingServers[index];
     if (!server || providerName() !== "Plex") return;
     if (state.client.server && server.id === state.client.server.id) return;
-    var revision = ++state.contentRevision;
     var previousSession = state.client.toSession();
+    var previousBinding = state.activeBinding;
+    if (state.player && state.player.teardown) state.player.teardown();
+    clearMediaNavigationState();
+    var revision = state.contentRevision;
     setLoading("Connecting to " + server.name + "…");
     state.client.connect(server);
     state.client.getLibraries().then(function (libraries) {
       if (revision !== state.contentRevision) return;
       state.libraries = libraries;
-      state.libraryItems = [];
-      state.libraryVisibleCount = 0;
-      state.searchItems = [];
-      state.searchVisibleCount = 0;
-      state.items = {};
-      Api.saveSession(state.client.toSession());
-      showScreen("browse");
-      setText("connection-badge", providerName() + " · " + serverName());
-      setActiveRoute("libraries");
-      setPage("Libraries", serverName());
-      renderLibrariesPage(libraries);
+      if (state.activeBinding) {
+        state.profileStore.updateBindingSession(state.activeBinding.id, state.client.toSession(), {
+          identityToken: state.client.identityToken,
+          serverId: state.client.server && state.client.server.id
+        });
+        state.profileStore.touchConnection(state.activeProfile.id, state.activeBinding.id);
+        state.activeBinding = state.profileStore.getBinding(state.activeBinding.id);
+      }
+      openBrowse();
+      toast("Connected to " + server.name + ".", 2800);
     }).catch(function (error) {
+      if (revision !== state.contentRevision) return;
       state.client = Api.clientFromSession(previousSession);
-      Api.saveSession(previousSession);
+      state.activeBinding = previousBinding;
+      state.pendingServers = state.client && state.client.servers ? state.client.servers.slice() : [];
       showScreen("browse");
       routeLibraries();
       toast("Could not switch servers: " + friendlyError(error), 7000);
@@ -447,16 +691,31 @@
   function routeSettings() {
     setActiveRoute("settings");
     state.contentRevision += 1;
-    setPage("Settings", providerName());
-    var serverUrl = state.client.baseUrl || "";
+    setPage("Settings", state.activeProfile ? state.activeProfile.name : providerName());
+    var bindings = state.activeProfile ? state.profileStore.getBindings(state.activeProfile.id) : [];
+    var connectionRows = bindings.map(function (binding) {
+      var current = state.activeBinding && binding.id === state.activeBinding.id;
+      var account = state.profileStore.getAccount(binding.accountId);
+      var identity = binding.provider === "plex" && binding.homeUser
+        ? (binding.homeUser.title || "Plex user")
+        : (account && account.name || providerName());
+      return '<div class="connection-row' + (current ? " is-current" : "") +
+        '"><div class="connection-copy"><strong>' + escapeHtml(binding.name) +
+        '</strong><small>' + escapeHtml((binding.provider === "plex" ? "Plex" : "Jellyfin") + " · " + identity +
+          (current ? " · Connected" : "")) + '</small></div><button class="small-button" data-connection-switch="' +
+        escapeHtml(binding.id) + '" data-focusable="true"' + (current ? " disabled" : "") + '>Use</button>' +
+        '<button class="small-button small-button--danger" data-connection-remove="' + escapeHtml(binding.id) +
+        '" data-focusable="true">Remove</button></div>';
+    }).join("");
     setBody(
-      '<div class="dialog-card dialog-card--wide" style="margin:8px 0;text-align:left">' +
-      '<p class="eyebrow">CONNECTED ACCOUNT</p><h2>' + escapeHtml(serverName()) + "</h2>" +
-      "<p>Provider: " + escapeHtml(providerName()) + "</p>" +
-      "<p>Server: " + escapeHtml(serverUrl) + "</p>" +
-      '<p class="privacy-note">Access tokens are stored only in this app\'s local Tizen storage. ' +
-      "Signing out deletes the saved session.</p>" +
-      '<button class="button" data-action="sign-out" data-focusable="true">Sign out</button></div>'
+      '<section class="settings-panel"><p class="eyebrow">ACTIVE PROFILE</p><h2>' +
+      escapeHtml(state.activeProfile ? state.activeProfile.name : "Profile") + '</h2><button class="button" ' +
+      'data-action="switch-profile" data-focusable="true">Switch profile</button> ' +
+      '<button class="button" data-action="manage-profiles" data-focusable="true">Manage profiles</button></section>' +
+      '<section class="settings-panel"><p class="eyebrow">CONNECTIONS</p><h2>Servers and providers</h2>' +
+      connectionRows + '<button class="button button--primary" data-action="add-connection" ' +
+      'data-focusable="true">＋ Add connection</button>' +
+      '<p class="privacy-note">Provider credentials remain in this TV app\'s local storage and are removed when no profile references them.</p></section>'
     );
     focusFirst(byId("content-body"));
   }
@@ -479,15 +738,20 @@
       return;
     }
     if (directPlay && item.type === "show" && state.client.getShowUpNext) {
+      var client = state.client;
+      var contextRevision = state.activationRevision;
       toast("Finding the next episode…", 1800);
-      state.client.getShowUpNext(item.id).then(function (nextEpisode) {
+      client.getShowUpNext(item.id).then(function (nextEpisode) {
+        if (client !== state.client || contextRevision !== state.activationRevision) return;
         if (nextEpisode) {
           rememberItems([nextEpisode]);
           state.player.start(nextEpisode);
         } else {
           openDetail(item, false);
         }
-      }).catch(function () { openDetail(item, false); });
+      }).catch(function () {
+        if (client === state.client && contextRevision === state.activationRevision) openDetail(item, false);
+      });
       return;
     }
     openDetail(item, false);
@@ -512,8 +776,11 @@
       if (previous) state.detailStack.push(previous);
       else state.detailStack = [];
     }
+    var client = state.client;
+    var contextRevision = state.activationRevision;
     setLoading("Loading details…");
-    state.client.getDetails(item.id).then(function (detail) {
+    client.getDetails(item.id).then(function (detail) {
+      if (client !== state.client || contextRevision !== state.activationRevision) return;
       state.currentDetail = detail;
       state.currentPlayTarget = detail.playable ? detail : null;
       rememberItems([detail]);
@@ -529,9 +796,9 @@
       byId("detail-children").innerHTML = "";
       showScreen("detail");
       if (detail.hasChildren) loadChildren(detail);
-      if (detail.type === "show" && state.client.getShowUpNext) {
-        state.client.getShowUpNext(detail.id).then(function (nextEpisode) {
-          if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
+      if (detail.type === "show" && client.getShowUpNext) {
+        client.getShowUpNext(detail.id).then(function (nextEpisode) {
+          if (client !== state.client || contextRevision !== state.activationRevision || !state.currentDetail || state.currentDetail.id !== detail.id) return;
           state.currentPlayTarget = nextEpisode;
           if (!nextEpisode) {
             hide(playButton);
@@ -545,13 +812,14 @@
             ? { scope: byId("detail-screen"), element: playButton, preferAutofocus: false }
             : null);
         }).catch(function () {
-          if (state.currentDetail && state.currentDetail.id === detail.id) {
+          if (client === state.client && contextRevision === state.activationRevision && state.currentDetail && state.currentDetail.id === detail.id) {
             hide(playButton);
             scheduleNavigationRefresh();
           }
         });
       }
     }).catch(function (error) {
+      if (client !== state.client || contextRevision !== state.activationRevision) return;
       toast(friendlyError(error));
       if (previous) showScreen("detail");
       else showScreen("browse");
@@ -561,12 +829,14 @@
   function loadChildren(detail) {
     detail = detail || state.currentDetail;
     if (!detail) return;
+    var client = state.client;
+    var contextRevision = state.activationRevision;
     var container = byId("detail-children");
     container.innerHTML = '<div class="children-loading"><div class="spinner"></div><p>Loading ' +
       (detail.type === "show" ? "seasons" : "episodes") + '…</p></div>';
     scheduleNavigationRefresh();
-    state.client.getChildren(detail.id, detail).then(function (items) {
-      if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
+    client.getChildren(detail.id, detail).then(function (items) {
+      if (client !== state.client || contextRevision !== state.activationRevision || !state.currentDetail || state.currentDetail.id !== detail.id) return;
       container.innerHTML = items.length
         ? shelfHtml({ title: detail.type === "show" ? "Seasons" : "Episodes", items: items }, {
           directPlayable: detail.type !== "show",
@@ -576,7 +846,7 @@
       if (detail.type === "season" || !state.currentPlayTarget) focusFirst(container);
       else scheduleNavigationRefresh();
     }).catch(function (error) {
-      if (!state.currentDetail || state.currentDetail.id !== detail.id) return;
+      if (client !== state.client || contextRevision !== state.activationRevision || !state.currentDetail || state.currentDetail.id !== detail.id) return;
       container.innerHTML = '<div class="error-state">' + escapeHtml(friendlyError(error)) + "</div>";
       scheduleNavigationRefresh();
     });
@@ -585,7 +855,9 @@
   function beginPlexLink() {
     clearInterval(state.pinTimer);
     var client = new Api.PlexClient();
-    state.client = client;
+    state.setupClient = client;
+    state.setupAccount = null;
+    state.setupAccountPersisted = false;
     hide(byId("plex-link-retry"));
     setText("plex-code", "––––");
     setText("plex-link-status", "Requesting a link code…");
@@ -611,17 +883,19 @@
       return;
     }
     client.checkPin(pinId).then(function (pin) {
+      if (state.screen !== "plex-link") return;
       if (!pin.authToken) return;
       clearInterval(state.pinTimer);
       client.token = pin.authToken;
       client.accountToken = pin.authToken;
-      setText("plex-link-status", "Signed in. Finding servers…");
-      return client.getServers().then(function (servers) {
-        if (!servers.length) throw new Error("No accessible Plex Media Server was found for this account.");
-        state.pendingServers = servers;
-        if (servers.length === 1) return choosePlexServer(0);
-        renderPlexServers();
-      });
+      client.identityToken = pin.authToken;
+      state.setupAccount = {
+        provider: "plex",
+        name: "Plex account",
+        token: pin.authToken
+      };
+      setText("plex-link-status", "Signed in. Loading Plex Home…");
+      return loadPlexHomeUsers(client, state.setupAccount, false);
     }).catch(function (error) {
       if (error && (error.status === 401 || error.status === 404)) return;
       clearInterval(state.pinTimer);
@@ -635,8 +909,159 @@
     focusFirst(byId("plex-link-screen"));
   }
 
+  function useLinkedPlexAccount(accountId) {
+    var account = state.profileStore.getAccount(accountId);
+    if (!account || account.provider !== "plex") {
+      showProviderSetup(state.setupProfileId, new Error("That linked Plex account is unavailable."), state.setupReturnScreen);
+      return;
+    }
+    var client = new Api.PlexClient({ accountToken: account.token, identityToken: account.token });
+    loadPlexHomeUsers(client, account, true);
+  }
+
+  function loadPlexHomeUsers(client, account, persisted) {
+    state.setupClient = client;
+    state.setupAccount = account;
+    state.setupAccountPersisted = persisted;
+    setLoading("Loading Plex Home users…");
+    return client.getHomeUsers().then(function (users) {
+      if (!persisted) {
+        var owner = users.filter(function (user) { return user.admin; })[0] || users[0];
+        if (owner) {
+          state.setupAccount.name = owner.title + " · Plex";
+          state.setupAccount.username = owner.username || "";
+        }
+      }
+      state.setupHomeUsers = users;
+      renderPlexHomeUsers();
+    }).catch(function (error) {
+      showProviderSetup(state.setupProfileId, error, state.setupReturnScreen);
+    });
+  }
+
+  function renderPlexHomeUsers(focusUuid) {
+    byId("plex-home-list").innerHTML = state.setupHomeUsers.map(function (user, index) {
+      var avatar = user.thumb
+        ? '<img src="' + escapeHtml(user.thumb) + '" alt="">'
+        : escapeHtml(profileInitials(user.title));
+      return '<button class="home-user-card" data-home-user="' + index + '" data-home-user-id="' +
+        escapeHtml(user.uuid) + '" data-focusable="true"><span class="home-user-avatar">' + avatar +
+        '</span><strong>' + escapeHtml(user.title) + '</strong><small>' +
+        (user.protected ? "PIN protected" : "Ready to use") + "</small></button>";
+    }).join("");
+    hide(byId("plex-home-error"));
+    showScreen("plex-home");
+    if (focusUuid) {
+      scheduleNavigationRefresh({
+        scope: byId("plex-home-screen"),
+        attributes: { "data-home-user-id": focusUuid },
+        preferAutofocus: false
+      });
+    }
+  }
+
+  function requestPlexPin(user, error, returnScreen) {
+    if (state.pinResolver) state.pinResolver(null);
+    state.pinReturnScreen = returnScreen || "activation";
+    setText("plex-pin-title", "Unlock " + (user && user.title || "Plex user"));
+    byId("plex-home-pin").value = "";
+    var errorElement = byId("plex-pin-error");
+    if (error) {
+      errorElement.textContent = friendlyError(error);
+      show(errorElement);
+    } else hide(errorElement);
+    showScreen("plex-pin");
+    return new Promise(function (resolve) { state.pinResolver = resolve; });
+  }
+
+  function submitPlexPin(event) {
+    event.preventDefault();
+    var pin = String(byId("plex-home-pin").value || "").trim();
+    if (!/^\d{4}$/.test(pin)) {
+      setText("plex-pin-error", "Enter the four-digit Plex Home PIN.");
+      show(byId("plex-pin-error"));
+      focusFirst(byId("plex-pin-screen"));
+      return;
+    }
+    var resolver = state.pinResolver;
+    state.pinResolver = null;
+    setLoading("Unlocking Plex Home…");
+    if (resolver) resolver(pin);
+  }
+
+  function cancelPlexPin() {
+    var resolver = state.pinResolver;
+    state.pinResolver = null;
+    if (resolver) {
+      setLoading("Cancelling profile activation…");
+      resolver(null);
+      return;
+    }
+    if (state.pinReturnScreen === "plex-home") renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
+    else renderProfilePicker();
+  }
+
+  function choosePlexHomeUser(index) {
+    var user = state.setupHomeUsers[index];
+    if (!user || !state.setupClient) return;
+    state.setupHomeUser = user;
+    if (user.protected) {
+      promptSetupPlexPin(null);
+      return;
+    }
+    activateSetupHomeUser("").catch(function (error) {
+      var errorElement = byId("plex-home-error");
+      errorElement.textContent = friendlyError(error);
+      show(errorElement);
+      renderPlexHomeUsers(user.uuid);
+      show(errorElement);
+    });
+  }
+
+  function promptSetupPlexPin(error) {
+    requestPlexPin(state.setupHomeUser, error, "plex-home").then(function (pin) {
+      if (pin === null) {
+        renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
+        return;
+      }
+      activateSetupHomeUser(pin).catch(function (switchError) {
+        if (switchError && switchError.isPinError) promptSetupPlexPin(switchError);
+        else {
+          renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
+          var errorElement = byId("plex-home-error");
+          errorElement.textContent = friendlyError(switchError);
+          show(errorElement);
+        }
+      });
+    });
+  }
+
+  function switchSetupHomeUser(pin, retried) {
+    var client = state.setupClient;
+    return client.switchHomeUser(state.setupHomeUser.uuid, pin).then(function (switched) {
+      state.setupIdentityToken = switched.token;
+      return client.getServers(switched.token);
+    }).catch(function (error) {
+      if (!retried && error && (error.status === 401 || error.status === 403) && !error.isPinError) {
+        return switchSetupHomeUser(pin, true);
+      }
+      throw error;
+    });
+  }
+
+  function activateSetupHomeUser(pin) {
+    setLoading("Finding servers for " + state.setupHomeUser.title + "…");
+    return switchSetupHomeUser(pin, false).then(function (servers) {
+      if (!servers.length) throw new Error("No Plex Media Server is available to this Home user.");
+      state.setupServers = servers;
+      if (servers.length === 1) return choosePlexServer(0);
+      renderPlexServers();
+      return true;
+    });
+  }
+
   function renderPlexServers() {
-    byId("server-list").innerHTML = state.pendingServers.map(function (server, index) {
+    byId("server-list").innerHTML = state.setupServers.map(function (server, index) {
       return '<button class="choice-button" data-server="' + index + '" data-focusable="true">' +
         "<span>" + escapeHtml(server.name) + "</span><small>" +
         (server.owned ? "Owned" : "Shared") + "</small></button>";
@@ -645,13 +1070,36 @@
   }
 
   function choosePlexServer(index) {
-    var server = state.pendingServers[index];
-    if (!server) return;
-    state.client.connect(server);
-    Api.saveSession(state.client.toSession());
+    var server = state.setupServers[index];
+    var client = state.setupClient;
+    if (!server || !client || !state.setupHomeUser) return;
+    client.connect(server);
     setLoading("Connecting to " + server.name + "…");
-    validateClient().then(openBrowse).catch(function (error) {
-      Api.clearSession();
+    client.getLibraries().then(function (libraries) {
+      var account = state.setupAccount;
+      if (!state.setupAccountPersisted) {
+        account = state.profileStore.upsertAccount({
+          provider: "plex",
+          name: account.name || "Plex account",
+          token: account.token,
+          username: account.username || ""
+        });
+        state.setupAccount = account;
+        state.setupAccountPersisted = true;
+      }
+      var binding = state.profileStore.bindConnection(state.setupProfileId, {
+        accountId: account.id,
+        provider: "plex",
+        name: server.name,
+        identityToken: state.setupIdentityToken || client.identityToken,
+        homeUser: state.setupHomeUser,
+        protected: state.setupHomeUser.protected,
+        serverId: server.id,
+        session: client.toSession()
+      });
+      state.profileStore.setDefaultConnection(state.setupProfileId, binding.id);
+      enterActiveConnection(state.profileStore.getProfile(state.setupProfileId), binding, client, libraries);
+    }).catch(function (error) {
       toast(friendlyError(error), 7000);
       renderPlexServers();
     });
@@ -666,10 +1114,26 @@
     hide(errorElement);
     setLoading("Signing in to Jellyfin…");
     Api.JellyfinClient.authenticate(url, username, password).then(function (client) {
-      state.client = client;
-      Api.saveSession(client.toSession());
-      return validateClient();
-    }).then(openBrowse).catch(function (error) {
+      return client.getLibraries().then(function (libraries) {
+        var session = client.toSession();
+        var account = state.profileStore.upsertAccount({
+          provider: "jellyfin",
+          name: (session.server && session.server.username) || username,
+          token: session.token,
+          baseUrl: session.baseUrl,
+          userId: session.userId,
+          server: session.server
+        });
+        var binding = state.profileStore.bindConnection(state.setupProfileId, {
+          accountId: account.id,
+          provider: "jellyfin",
+          name: session.server && session.server.name || "Jellyfin",
+          session: session
+        });
+        state.profileStore.setDefaultConnection(state.setupProfileId, binding.id);
+        enterActiveConnection(state.profileStore.getProfile(state.setupProfileId), binding, client, libraries);
+      });
+    }).catch(function (error) {
       showScreen("jellyfin-login");
       errorElement.textContent = friendlyError(error);
       show(errorElement);
@@ -677,46 +1141,117 @@
     });
   }
 
-  function validateClient() {
-    return state.client.getLibraries().then(function (libraries) {
-      state.libraries = libraries;
-      return true;
+  function enterActiveConnection(profile, binding, client, libraries) {
+    if (state.player && state.player.teardown) state.player.teardown();
+    state.activationRevision += 1;
+    clearMediaNavigationState();
+    state.client = client;
+    state.activeProfile = profile;
+    state.activeBinding = binding;
+    state.libraries = libraries || [];
+    state.pendingServers = client && client.servers ? client.servers.slice() : [];
+    state.profileStore.touchConnection(profile.id, binding.id);
+    state.activeProfile = state.profileStore.getProfile(profile.id);
+    state.activeBinding = state.profileStore.getBinding(binding.id);
+    state.setupClient = null;
+    state.setupAccount = null;
+    state.setupHomeUser = null;
+    state.setupServers = [];
+    openBrowse();
+  }
+
+  function activateStoredConnection(profileId, bindingId, rollback) {
+    var profile = state.profileStore.getProfile(profileId);
+    var binding = state.profileStore.getBinding(bindingId);
+    var account = binding && state.profileStore.getAccount(binding.accountId);
+    var previous = rollback ? {
+      profile: state.activeProfile,
+      binding: state.activeBinding,
+      client: state.client
+    } : null;
+    leaveActiveContext();
+    var revision = state.activationRevision;
+    setLoading("Opening " + (profile ? profile.name : "profile") + "…");
+    Api.activateConnection(profile, binding, account, {
+      requestPin: function (homeUser, error) { return requestPlexPin(homeUser, error, "activation"); }
+    }).then(function (result) {
+      if (revision !== state.activationRevision) return;
+      if (!result.ok) {
+        if (previous && previous.client) {
+          state.client = previous.client;
+          state.activeProfile = previous.profile;
+          state.activeBinding = previous.binding;
+          state.pendingServers = previous.client.servers ? previous.client.servers.slice() : [];
+          showScreen("browse");
+          routeSettings();
+          scheduleNavigationRefresh({
+            scope: byId("content-body"),
+            attributes: { "data-connection-switch": bindingId },
+            preferAutofocus: false
+          });
+          if (!result.error.cancelled) toast("Could not switch connections: " + result.error.message, 7000);
+          return;
+        }
+        renderProfilePicker(result.error.cancelled ? null : new Error(
+          result.error.message + " Select the profile to retry, or use Manage profiles to remove and set it up again."
+        ), profileId);
+        return;
+      }
+      if (result.binding && binding.provider === "plex") {
+        state.profileStore.updateBindingSession(binding.id, result.session, {
+          identityToken: result.binding.identityToken,
+          homeUser: result.binding.homeUser,
+          serverId: result.binding.serverId
+        });
+        binding = state.profileStore.getBinding(binding.id);
+      }
+      enterActiveConnection(profile, binding, result.client, result.validation || []);
     });
   }
 
-  function restoreSession() {
-    var session = Api.loadSession();
-    if (!session) {
-      showScreen("welcome");
+  function selectProfile(profileId) {
+    var binding = state.profileStore.chooseDefaultConnection(profileId);
+    if (!binding) {
+      leaveActiveContext();
+      showProviderSetup(profileId, null, "profile-picker");
       return;
     }
-    state.client = Api.clientFromSession(session);
-    state.pendingServers = state.client && state.client.servers ? state.client.servers.slice() : [];
-    setLoading("Reconnecting to " + serverName() + "…");
-    validateClient().then(openBrowse).catch(function () {
-      Api.clearSession();
-      state.client = null;
-      showScreen("welcome");
-      toast("The saved session is no longer valid. Please sign in again.", 6500);
-    });
+    activateStoredConnection(profileId, binding.id, false);
   }
 
-  function signOut() {
-    if (state.player) state.player.stop();
-    Api.clearSession();
-    state.client = null;
-    state.items = {};
-    state.libraries = [];
-    state.libraryItems = [];
-    state.libraryVisibleCount = 0;
-    state.searchItems = [];
-    state.searchVisibleCount = 0;
-    state.contentRevision += 1;
-    state.currentDetail = null;
-    state.currentPlayTarget = null;
-    state.detailStack = [];
-    state.pendingServers = [];
-    showScreen("welcome");
+  function switchConnection(bindingId) {
+    if (!state.activeProfile || state.activeBinding && state.activeBinding.id === bindingId) return;
+    activateStoredConnection(state.activeProfile.id, bindingId, true);
+  }
+
+  function removeConnection(bindingId) {
+    var binding = state.profileStore.getBinding(bindingId);
+    if (!binding || !state.activeProfile || binding.profileId !== state.activeProfile.id) return;
+    showConfirmation(
+      "Remove " + binding.name + "?",
+      "This removes the saved provider credential when no other profile connection uses it.",
+      "Remove connection",
+      function () {
+        var wasActive = state.activeBinding && state.activeBinding.id === bindingId;
+        state.profileStore.unbindConnection(state.activeProfile.id, bindingId);
+        if (!wasActive) {
+          showScreen("browse");
+          routeSettings();
+          return;
+        }
+        var profileId = state.activeProfile.id;
+        var replacement = state.profileStore.chooseDefaultConnection(profileId);
+        leaveActiveContext();
+        if (replacement) activateStoredConnection(profileId, replacement.id, false);
+        else showProviderSetup(profileId, null, "profile-picker");
+      },
+      "browse"
+    );
+  }
+
+  function restoreProfiles() {
+    state.profileStore.migrateLegacy();
+    renderProfilePicker();
   }
 
   function formatTime(ms) {
@@ -737,6 +1272,8 @@
 
   function PlayerController() {
     this.playback = null;
+    this.client = null;
+    this.contextRevision = 0;
     this.usingAvPlay = false;
     this.positionMs = 0;
     this.durationMs = 0;
@@ -764,18 +1301,25 @@
       }
       self.updateChrome();
     });
-    this.html.addEventListener("ended", function () { self.stop(true); });
-    this.html.addEventListener("error", function () { self._playbackFailed("The TV could not play this stream."); });
+    this.html.addEventListener("ended", function () { if (self.playback) self.stop(true); });
+    this.html.addEventListener("error", function () {
+      if (self.playback) self._playbackFailed("The TV could not play this stream.");
+    });
   };
 
   PlayerController.prototype.start = function (item) {
     var self = this;
+    var client = state.client;
+    var contextRevision = state.activationRevision;
     var active = document.activeElement;
     this.returnScreen = state.screen === "browse" ? "browse" : "detail";
     this.returnFocusItem = active && active.getAttribute ? (active.getAttribute("data-item") || "") : "";
     this.returnFocusAction = active && active.getAttribute ? (active.getAttribute("data-action") || "") : "";
     setLoading("Preparing playback…");
-    return state.client.createPlayback(item).then(function (playback) {
+    return client.createPlayback(item).then(function (playback) {
+      if (client !== state.client || contextRevision !== state.activationRevision) return;
+      self.client = client;
+      self.contextRevision = contextRevision;
       self.playback = playback;
       self.positionMs = playback.startMs || 0;
       self.durationMs = playback.durationMs || 0;
@@ -787,11 +1331,12 @@
       showScreen("player");
       self._open(playback.url);
       self.progressTimer = setInterval(function () {
-        state.client.reportProgress(self.playback, self.positionMs, self.paused ? "paused" : "playing");
+        if (self.client && self.playback) self.client.reportProgress(self.playback, self.positionMs, self.paused ? "paused" : "playing");
       }, 10000);
-      state.client.reportProgress(playback, self.positionMs, "playing");
+      self.client.reportProgress(playback, self.positionMs, "playing");
       self.showChrome();
     }).catch(function (error) {
+      if (client !== state.client || contextRevision !== state.activationRevision) return;
       toast(friendlyError(error), 6500);
       self.restoreScreen();
     });
@@ -843,7 +1388,7 @@
           self.positionMs = self.timelineOffsetMs + (Number(time) || 0);
           self.updateChrome();
         },
-        onstreamcompleted: function () { self.stop(true); },
+        onstreamcompleted: function () { if (self.playback) self.stop(true); },
         onerror: function (eventType) {
           self._playbackFailed("Samsung AVPlay could not play this stream" +
             (eventType ? " (" + eventType + ")." : "."));
@@ -902,6 +1447,7 @@
   };
 
   PlayerController.prototype._playbackFailed = function (message) {
+    if (!this.playback || !this.client || this.contextRevision !== state.activationRevision) return;
     if (this.playback && this.playback.directUrl && !this.triedDirect) {
       this.triedDirect = true;
       toast("Transcode failed; trying direct play…", 3200);
@@ -934,7 +1480,7 @@
         else this.html.pause();
       }
       this.paused = !this.paused;
-      state.client.reportProgress(this.playback, this.positionMs, this.paused ? "paused" : "playing");
+      if (this.client) this.client.reportProgress(this.playback, this.positionMs, this.paused ? "paused" : "playing");
       this.showChrome();
     } catch (error) { toast(friendlyError(error)); }
   };
@@ -959,14 +1505,31 @@
     }
     clearInterval(this.progressTimer);
     clearTimeout(this.chromeTimer);
-    state.client.reportProgress(this.playback, completed ? this.durationMs : this.positionMs, "stopped");
+    if (this.client) this.client.reportProgress(this.playback, completed ? this.durationMs : this.positionMs, "stopped");
     this._closeMedia();
     this.playback = null;
+    this.client = null;
     this.positionMs = 0;
     this.durationMs = 0;
     this.timelineOffsetMs = 0;
     this.resumeSeekPending = false;
     this.restoreScreen();
+  };
+
+  PlayerController.prototype.teardown = function () {
+    clearInterval(this.progressTimer);
+    clearTimeout(this.chromeTimer);
+    if (this.playback && this.client) {
+      this.client.reportProgress(this.playback, this.positionMs, "stopped");
+    }
+    if (this.playback) this._closeMedia();
+    this.playback = null;
+    this.client = null;
+    this.positionMs = 0;
+    this.durationMs = 0;
+    this.timelineOffsetMs = 0;
+    this.resumeSeekPending = false;
+    this.paused = false;
   };
 
   PlayerController.prototype.updateChrome = function () {
@@ -1018,13 +1581,55 @@
       }
       return;
     }
-    if (state.screen === "plex-link" || state.screen === "jellyfin-login" || state.screen === "server") {
+    if (state.screen === "confirm") {
+      cancelConfirmation();
+      return;
+    }
+    if (state.screen === "plex-pin") {
+      cancelPlexPin();
+      return;
+    }
+    if (state.screen === "profile-name") {
+      if (state.profileFormMode === "rename") renderProfileManagement(state.profileFormTarget);
+      else if (state.profileStore.getProfiles().length) renderProfilePicker();
+      else exitApplication();
+      return;
+    }
+    if (state.screen === "profile-manage") {
+      if (state.activeProfile && state.client) {
+        showScreen("browse");
+        routeSettings();
+      } else renderProfilePicker();
+      return;
+    }
+    if (state.screen === "welcome") {
+      if (state.setupReturnScreen === "browse" && state.activeProfile && state.client) {
+        showScreen("browse");
+        routeSettings();
+      } else renderProfilePicker(null, state.setupProfileId);
+      return;
+    }
+    if (state.screen === "plex-home") {
+      showProviderSetup(state.setupProfileId, null, state.setupReturnScreen);
+      showScreen("welcome");
+      return;
+    }
+    if (state.screen === "server") {
+      renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
+      return;
+    }
+    if (state.screen === "plex-link" || state.screen === "jellyfin-login") {
       clearInterval(state.pinTimer);
+      showProviderSetup(state.setupProfileId, null, state.setupReturnScreen);
       showScreen("welcome");
       return;
     }
     if (state.screen === "browse" && state.route !== "home") {
       routeHome();
+      return;
+    }
+    if (state.screen === "profile-picker") {
+      exitApplication();
       return;
     }
     exitApplication();
@@ -1152,14 +1757,34 @@
       var libraryIndex = target.getAttribute("data-library");
       var serverIndex = target.getAttribute("data-server");
       var serverSwitchIndex = target.getAttribute("data-server-switch");
+      var profileId = target.getAttribute("data-profile-id");
+      var plexAccountId = target.getAttribute("data-plex-account-id");
+      var homeUserIndex = target.getAttribute("data-home-user");
+      var renameProfileId = target.getAttribute("data-profile-rename");
+      var deleteProfileId = target.getAttribute("data-profile-delete");
+      var connectionId = target.getAttribute("data-connection-switch");
+      var removeConnectionId = target.getAttribute("data-connection-remove");
       var action = target.getAttribute("data-action");
       if (route) navigate(route);
       if (itemId !== null) activateItem(state.items[itemId], target.getAttribute("data-direct-play") === "true");
       if (libraryIndex !== null) openLibrary(Number(libraryIndex));
       if (serverIndex !== null) choosePlexServer(Number(serverIndex));
       if (serverSwitchIndex !== null) switchPlexServer(Number(serverSwitchIndex));
+      if (profileId !== null) selectProfile(profileId);
+      if (plexAccountId !== null) useLinkedPlexAccount(plexAccountId);
+      if (homeUserIndex !== null) choosePlexHomeUser(Number(homeUserIndex));
+      if (renameProfileId !== null) showProfileEditor(state.profileStore.getProfile(renameProfileId));
+      if (deleteProfileId !== null) deleteProfile(deleteProfileId);
+      if (connectionId !== null) switchConnection(connectionId);
+      if (removeConnectionId !== null) removeConnection(removeConnectionId);
       if (action === "back") goBack();
-      if (action === "sign-out") signOut();
+      if (action === "new-profile") showProfileEditor(null);
+      if (action === "manage-profiles") renderProfileManagement();
+      if (action === "switch-profile") openProfilePicker();
+      if (action === "add-connection" && state.activeProfile) showProviderSetup(state.activeProfile.id, null, "browse");
+      if (action === "cancel-pin") cancelPlexPin();
+      if (action === "cancel-confirm") cancelConfirmation();
+      if (action === "confirm") confirmAction();
       if (action === "load-more") {
         if (state.route === "search") {
           var nextSearchItem = state.searchItems[state.searchVisibleCount];
@@ -1176,6 +1801,8 @@
     byId("plex-link-retry").addEventListener("click", beginPlexLink);
     byId("jellyfin-connect").addEventListener("click", function () { showScreen("jellyfin-login"); });
     byId("jellyfin-form").addEventListener("submit", jellyfinLogin);
+    byId("profile-name-form").addEventListener("submit", submitProfileName);
+    byId("plex-pin-form").addEventListener("submit", submitPlexPin);
     byId("content-body").addEventListener("submit", function (event) {
       if (event.target && event.target.id === "search-form") {
         event.preventDefault();
@@ -1194,6 +1821,8 @@
 
   function init() {
     if (!Navigation) throw new Error("Plezy TV navigation module did not load.");
+    if (!Profiles || !Profiles.ProfileStore) throw new Error("Plezy TV profile store did not load.");
+    state.profileStore = new Profiles.ProfileStore();
     state.navigation = new Navigation.NavigationIndex({ document: document, artworkLookAhead: 6 });
     state.repeatGate = new Navigation.RepeatGate(85);
     state.performanceDiagnostics = performanceDiagnosticsEnabled();
@@ -1203,7 +1832,7 @@
     logRuntimeDimensions();
     updateClock();
     setInterval(updateClock, 30000);
-    restoreSession();
+    restoreProfiles();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

@@ -17,6 +17,20 @@
       var screens = doc.querySelectorAll("section.screen");
       Array.prototype.forEach.call(screens, function (screen) { screen.classList.add("hidden"); });
 
+      var query = location.search;
+      if (query.indexOf("picker") !== -1 || !/(?:home|libraries|show|season)/.test(query)) {
+        var picker = doc.getElementById("profile-picker-screen");
+        picker.classList.remove("hidden");
+        doc.getElementById("profile-list").innerHTML = [
+          profile("Alex Morgan", "AM", ["plex"], "2 connections"),
+          profile("Kids", "K", ["plex", "jellyfin"], "2 connections"),
+          profile("Sam", "S", ["jellyfin"], "1 connection"),
+          profile("Guest", "G", [], "Set up a provider")
+        ].join("");
+        picker.querySelector(".profile-card").focus();
+        return;
+      }
+
       if (location.search.indexOf("show") !== -1 || location.search.indexOf("season") !== -1) {
         var seasonMode = location.search.indexOf("season") !== -1;
         var detail = doc.getElementById("detail-screen");
@@ -79,6 +93,14 @@
           (progress ? '<div class="media-progress"><div style="width:' + progress + '%"></div></div>' : '') +
           '</div><div class="media-copy"><span class="media-title">' + title + '</span>' +
           '<span class="media-subtitle">' + subtitle + '</span></div></button>';
+      }
+
+      function profile(name, initials, providers, subtitle) {
+        return '<button class="profile-card" data-focusable="true"><span class="profile-avatar">' + initials +
+          '</span><strong>' + name + '</strong><span class="profile-provider-badges">' +
+          providers.map(function (providerName) {
+            return '<span class="provider-badge provider-badge--' + providerName + '">' + providerName + '</span>';
+          }).join("") + '</span><small>' + subtitle + '</small></button>';
       }
 
       var posters = [

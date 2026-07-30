@@ -9,6 +9,9 @@ var root = path.resolve(__dirname, "..");
 var app = fs.readFileSync(path.join(root, "js", "app.js"), "utf8");
 var navigation = fs.readFileSync(path.join(root, "js", "navigation.js"), "utf8");
 var css = fs.readFileSync(path.join(root, "css", "app.css"), "utf8");
+var index = fs.readFileSync(path.join(root, "index.html"), "utf8");
+var profiles = fs.readFileSync(path.join(root, "js", "profile-store.js"), "utf8");
+var preview = fs.readFileSync(path.join(root, "tests", "tv-preview.html"), "utf8");
 
 test("resumed transcodes retain their absolute timeline position", function () {
   assert.match(app, /timelineOffsetMs \+ \(Number\(time\) \|\| 0\)/);
@@ -120,4 +123,55 @@ test("Libraries contains owned and shared Plex server groups", function () {
   assert.match(app, /plexServerGroupHtml\("Your Server", true\)/);
   assert.match(app, /plexServerGroupHtml\("Shared With You", false\)/);
   assert.match(app, /data-server-switch/);
+});
+
+test("launch migration always resolves to the D-pad profile picker", function () {
+  var restore = app.slice(app.indexOf("function restoreProfiles"), app.indexOf("function formatTime"));
+  assert.match(restore, /profileStore\.migrateLegacy\(\)/);
+  assert.match(restore, /renderProfilePicker\(\)/);
+  assert.doesNotMatch(restore, /activateStoredConnection|openBrowse/);
+  assert.match(index, /id="profile-picker-screen"/);
+  assert.match(index, /data-action="new-profile"/);
+  assert.match(css, /\.profile-grid/);
+  assert.match(css, /\.profile-avatar/);
+});
+
+test("profile and connection activation tears down playback, clears state, and suppresses stale work", function () {
+  var leave = app.slice(app.indexOf("function leaveActiveContext"), app.indexOf("function renderProfilePicker"));
+  var activate = app.slice(app.indexOf("function activateStoredConnection"), app.indexOf("function selectProfile"));
+  assert.match(leave, /state\.player\.teardown\(\)/);
+  assert.match(leave, /clearMediaNavigationState\(\)/);
+  assert.match(leave, /state\.client = null/);
+  assert.match(activate, /revision !== state\.activationRevision/);
+  assert.match(activate, /previous && previous\.client/);
+  assert.match(activate, /routeSettings\(\)/);
+});
+
+test("playback progress stays bound to the client that created the playback", function () {
+  var player = app.slice(app.indexOf("function PlayerController"), app.indexOf("function moveFocus"));
+  assert.match(player, /this\.client = null/);
+  assert.match(player, /self\.client\.reportProgress/);
+  assert.match(player, /this\.client\.reportProgress/);
+  assert.doesNotMatch(player, /state\.client\.reportProgress/);
+  assert.match(player, /PlayerController\.prototype\.teardown/);
+});
+
+test("Settings exposes profile, connection switch, add, and remove management", function () {
+  var settings = app.slice(app.indexOf("function routeSettings"), app.indexOf("function navigate"));
+  assert.match(settings, /data-action="switch-profile"/);
+  assert.match(settings, /data-connection-switch/);
+  assert.match(settings, /data-connection-remove/);
+  assert.match(settings, /data-action="add-connection"/);
+});
+
+test("the maintained package loads the profile store before app startup", function () {
+  assert.match(index, /src="js\/profile-store\.js"/);
+  assert.ok(index.indexOf('src="js/profile-store.js"') < index.indexOf('src="js/app.js"'));
+  assert.match(profiles, /plezy-tv-profiles-v2/);
+});
+
+test("the 1920x1080 preview opens on the profile picker", function () {
+  assert.match(preview, /html, body, iframe \{ width: 1920px; height: 1080px/);
+  assert.match(preview, /profile-picker-screen/);
+  assert.match(preview, /!\/\(\?:home\|libraries\|show\|season\)\//);
 });

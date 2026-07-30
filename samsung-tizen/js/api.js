@@ -6,7 +6,7 @@
   "use strict";
 
   var PRODUCT = "Plezy TV";
-  var VERSION = "2.10.5-samsung.6";
+  var VERSION = "2.10.5-samsung.7";
   var STORAGE_KEY = "plezy-tv-session-v1";
   var DEVICE_KEY = "plezy-tv-device-id";
   var PLEX_TIZEN_PROFILE = [
@@ -89,6 +89,15 @@
   function array(value) {
     if (!value) return [];
     return Array.isArray(value) ? value : [value];
+  }
+
+  function clone(value) {
+    if (value === undefined) return undefined;
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
+  }
+
+  function truthy(value) {
+    return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
   }
 
   function number(value, fallback) {
@@ -195,7 +204,11 @@
     state = state || {};
     this.provider = "plex";
     this.token = state.token || "";
-    this.accountToken = state.accountToken || state.token || "";
+    /* accountToken is the owner credential and is used only for Plex Home
+       administration. identityToken belongs to the selected Home user and is
+       the only credential used to discover that user's servers. */
+    this.accountToken = state.accountToken || "";
+    this.identityToken = state.identityToken || state.discoveryToken || state.accountToken || state.token || "";
     this.server = state.server || null;
     this.baseUrl = state.baseUrl || "";
     this.servers = orderPlexServers(state.servers || []);
@@ -221,10 +234,100 @@
     });
   };
 
-  PlexClient.prototype.getServers = function () {
+  function xmlAttributes(source) {
+    var result = {};
+    String(source || "").replace(/([\w:-]+)=(?:"([^"]*)"|'([^']*)')/g, function (_, key, doubleValue, singleValue) {
+      result[key] = doubleValue !== undefined ? doubleValue : singleValue;
+      return _;
+    });
+    return result;
+  }
+
+  function plexHomeUser(raw) {
+    raw = raw || {};
+    var uuidValue = raw.uuid || raw.id || raw.userId || raw.ID;
+    if (!uuidValue) return null;
+    return {
+      uuid: String(uuidValue),
+      title: raw.title || raw.name || raw.username || "Plex user",
+      username: raw.username || raw.email || "",
+      thumb: raw.thumb || raw.avatar || "",
+      protected: truthy(raw.protected),
+      admin: truthy(raw.admin || raw.owner || raw.restricted === false),
+      raw: raw
+    };
+  }
+
+  function normalizeHomeUsers(payload) {
+    var users = [];
+    if (typeof payload === "string") {
+      var userPattern = /<User\b([^>]*)\/?\s*>/gi;
+      var match;
+      while ((match = userPattern.exec(payload))) users.push(xmlAttributes(match[1]));
+    } else if (Array.isArray(payload)) {
+      users = payload;
+    } else if (payload) {
+      var container = payload.MediaContainer || payload;
+      users = array(container.User || container.users || container.user);
+    }
+    return users.map(plexHomeUser).filter(Boolean);
+  }
+
+  function plexIdentityToken(payload) {
+    if (!payload) return "";
+    if (typeof payload === "string") {
+      var match = payload.match(/(?:authToken|authenticationToken|authentication_token|auth_token)=(?:"([^"]+)"|'([^']+)')/i);
+      return match ? (match[1] || match[2] || "") : "";
+    }
+    var container = payload.MediaContainer || payload;
+    var user = container.user || container.User || payload.user || payload.User || container;
+    return user.authToken || user.authenticationToken || user.authentication_token || user.auth_token || "";
+  }
+
+  PlexClient.prototype.getHomeUsers = function () {
+    var token = this.accountToken || this.identityToken;
+    if (!token) return Promise.reject(apiError("Link a Plex account before choosing a Home user."));
+    return request("https://plex.tv/api/home/users", {
+      headers: plexHeaders(token)
+    }).then(function (payload) {
+      var users = normalizeHomeUsers(payload);
+      if (!users.length) throw apiError("Plex Home did not return any users.");
+      return users;
+    });
+  };
+
+  PlexClient.prototype.switchHomeUser = function (userUuid, pin) {
     var self = this;
+    var token = this.accountToken;
+    if (!token) return Promise.reject(apiError("The linked Plex account credential is unavailable."));
+    var url = withQuery("https://plex.tv/api/home/users/" + encodeURIComponent(userUuid) + "/switch", {
+      pin: pin === undefined || pin === null ? "" : String(pin)
+    });
+    return request(url, {
+      method: "POST",
+      headers: plexHeaders(token)
+    }).then(function (payload) {
+      var identityToken = plexIdentityToken(payload);
+      if (!identityToken) throw apiError("Plex did not return a Home-user token.");
+      self.identityToken = identityToken;
+      return { token: identityToken, authToken: identityToken, user: payload && (payload.user || payload.User || payload) };
+    }).catch(function (error) {
+      if (error && (error.status === 400 || error.status === 401 || error.status === 403 || error.status === 422)) {
+        error.code = pin ? "PLEX_PIN_INVALID" : "PLEX_PIN_REQUIRED";
+        error.isPinError = true;
+        error.recoverable = true;
+        error.message = pin ? "That Plex Home PIN was not accepted." : "This Plex Home user requires a PIN.";
+      }
+      throw error;
+    });
+  };
+
+  PlexClient.prototype.getServers = function (identityToken) {
+    var self = this;
+    var discoveryToken = identityToken || this.identityToken || this.accountToken || this.token;
+    if (identityToken) this.identityToken = identityToken;
     return request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1", {
-      headers: plexHeaders(this.accountToken || this.token),
+      headers: plexHeaders(discoveryToken),
       timeoutMs: 7000
     }).then(function (resources) {
       return array(resources).filter(function (resource) {
@@ -238,7 +341,7 @@
           local: connection ? connection.local === true : false,
           relay: connection ? connection.relay === true : false,
           protocol: connection ? connection.protocol : "",
-          accessToken: resource.accessToken || self.accountToken || self.token,
+          accessToken: resource.accessToken || discoveryToken,
           baseUrl: connection ? trimSlash(connection.uri) : "",
           connections: array(resource.connections),
           raw: resource
@@ -249,6 +352,9 @@
       return servers;
     });
   };
+
+  PlexClient.prototype.discoverServers = PlexClient.prototype.getServers;
+  PlexClient.prototype.getServersForIdentity = PlexClient.prototype.getServers;
 
   PlexClient.prototype.connect = function (server) {
     this.server = {
@@ -266,7 +372,8 @@
     return {
       provider: "plex",
       token: this.token,
-      accountToken: this.accountToken || this.token,
+      accountToken: this.accountToken || this.identityToken,
+      identityToken: this.identityToken,
       server: this.server,
       baseUrl: this.baseUrl,
       servers: this.servers
@@ -850,6 +957,153 @@
     return null;
   }
 
+  function authFailure(error) {
+    return Boolean(error && (error.status === 401 || error.status === 403));
+  }
+
+  function cancelledError() {
+    var error = apiError("Profile activation was cancelled.");
+    error.code = "ACTIVATION_CANCELLED";
+    error.cancelled = true;
+    error.recoverable = true;
+    return error;
+  }
+
+  function activationFailure(profile, binding, error) {
+    return {
+      ok: false,
+      profile: clone(profile),
+      binding: clone(binding),
+      client: null,
+      session: null,
+      recoverable: Boolean(error && (error.recoverable || error.cancelled || authFailure(error))),
+      error: {
+        message: error && error.message ? error.message : "Could not activate this connection.",
+        status: error && error.status || 0,
+        code: error && error.code || "ACTIVATION_FAILED",
+        cancelled: Boolean(error && error.cancelled),
+        pinRequired: Boolean(error && error.isPinError)
+      }
+    };
+  }
+
+  function activateConnection(profile, binding, account, options) {
+    options = options || {};
+    profile = clone(profile);
+    binding = clone(binding);
+    account = clone(account);
+    if (!profile || !binding || !account || binding.profileId !== profile.id || binding.accountId !== account.id) {
+      return Promise.resolve(activationFailure(profile, binding, apiError("The saved profile connection is incomplete.")));
+    }
+    var session = clone(binding.session) || {};
+    session.provider = binding.provider;
+    if (binding.provider === "jellyfin") {
+      session.token = session.token || account.token;
+      session.userId = session.userId || account.userId;
+      session.baseUrl = session.baseUrl || account.baseUrl;
+      session.server = session.server || account.server;
+    } else if (binding.provider === "plex") {
+      session.identityToken = binding.identityToken || session.identityToken || account.token;
+      session.accountToken = account.token;
+    }
+    var client = clientFromSession(session);
+    var validationValue = null;
+    if (!client) return Promise.resolve(activationFailure(profile, binding, apiError("This provider is not supported.")));
+
+    function validate() {
+      var pending = typeof options.validate === "function"
+        ? Promise.resolve(options.validate(client))
+        : client.getLibraries();
+      return pending.then(function (value) {
+        validationValue = value;
+        return value;
+      });
+    }
+
+    function switchAndDiscover(pin, retry) {
+      return client.switchHomeUser(binding.homeUser.uuid, pin).then(function (switched) {
+        return client.getServers(switched.token).then(function (servers) {
+          var selected = null;
+          servers.some(function (server) {
+            if (server.id !== (binding.serverId || (session.server && session.server.id))) return false;
+            selected = server;
+            return true;
+          });
+          if (!selected) throw apiError("The selected Plex server is no longer available to this Home user.");
+          client.connect(selected);
+          binding.identityToken = switched.token;
+          binding.session = client.toSession();
+          delete binding.session.accountToken;
+          return validate();
+        });
+      }).catch(function (error) {
+        if (!retry && authFailure(error) && !error.isPinError) return switchAndDiscover(pin, true);
+        throw error;
+      });
+    }
+
+    function requestPin(error, attempt) {
+      if (!binding.protected && !(binding.homeUser && binding.homeUser.protected)) {
+        return switchAndDiscover("", false);
+      }
+      if (typeof options.requestPin !== "function") {
+        error = error || apiError("A Plex Home PIN is required.");
+        error.code = "PLEX_PIN_REQUIRED";
+        error.isPinError = true;
+        error.recoverable = true;
+        return Promise.reject(error);
+      }
+      return Promise.resolve(options.requestPin(clone(binding.homeUser), error || null)).then(function (pin) {
+        if (pin === null || pin === undefined || pin === false) throw cancelledError();
+        pin = String(pin).trim();
+        if (!/^\d{4}$/.test(pin)) {
+          var invalid = apiError("Enter the four-digit Plex Home PIN.");
+          invalid.code = "PLEX_PIN_INVALID";
+          invalid.isPinError = true;
+          invalid.recoverable = true;
+          throw invalid;
+        }
+        return switchAndDiscover(pin, false).catch(function (switchError) {
+          if (switchError && switchError.isPinError && attempt < 1) return requestPin(switchError, attempt + 1);
+          throw switchError;
+        });
+      });
+    }
+
+    var protectedIdentity = binding.provider === "plex" && binding.homeUser && binding.homeUser.uuid &&
+      (binding.protected || binding.homeUser.protected);
+    var activation = protectedIdentity
+      ? requestPin(null, 0)
+      : validate().catch(function (error) {
+        if (!authFailure(error) || binding.provider !== "plex" || !binding.homeUser || !binding.homeUser.uuid || !account.token) {
+          throw error;
+        }
+        return requestPin(error, 0);
+      });
+
+    return activation.then(function () {
+      var resultSession = client.toSession();
+      if (binding.provider === "plex") {
+        delete resultSession.accountToken;
+        binding.identityToken = client.identityToken;
+        binding.serverId = client.server && client.server.id || binding.serverId;
+        binding.session = clone(resultSession);
+      }
+      return {
+        ok: true,
+        profile: profile,
+        binding: binding,
+        client: client,
+        session: resultSession,
+        validation: validationValue,
+        recoverable: false,
+        error: null
+      };
+    }).catch(function (error) {
+      return activationFailure(profile, binding, error);
+    });
+  }
+
   return {
     PRODUCT: PRODUCT,
     VERSION: VERSION,
@@ -858,6 +1112,9 @@
     choosePlexConnection: choosePlexConnection,
     orderPlexServers: orderPlexServers,
     chooseUpNext: chooseUpNext,
+    normalizeHomeUsers: normalizeHomeUsers,
+    plexIdentityToken: plexIdentityToken,
+    activateConnection: activateConnection,
     clientFromSession: clientFromSession,
     loadSession: loadSession,
     saveSession: saveSession,
