@@ -136,7 +136,6 @@ button {
   }
 }
 
-.welcome-card,
 .dialog-card {
   position: relative;
   width: 880px;
@@ -156,12 +155,6 @@ button {
   color: var(--muted);
   font-size: 21px;
   line-height: 1.5;
-}
-
-.welcome-logo {
-  width: 128px;
-  height: 128px;
-  object-fit: contain;
 }
 
 h1,
@@ -273,24 +266,24 @@ h2 {
   color: var(--danger);
 }
 
-.profile-shell {
+.identity-shell {
   width: 1540px;
   max-height: 1010px;
   text-align: center;
 }
 
-.profile-logo {
+.identity-logo {
   width: 106px;
   height: 106px;
   margin-bottom: 20px;
   object-fit: contain;
 }
 
-.profile-shell h1 {
+.identity-shell h1 {
   margin-bottom: 38px;
 }
 
-.profile-error {
+.identity-error {
   width: 980px;
   min-height: 0;
   margin: -18px auto 25px;
@@ -299,7 +292,7 @@ h2 {
   background: rgba(185, 67, 67, .18);
 }
 
-.profile-grid {
+.identity-grid {
   display: flex;
   justify-content: center;
   min-height: 310px;
@@ -309,7 +302,7 @@ h2 {
   flex-wrap: wrap;
 }
 
-.profile-card {
+.identity-card {
   width: 245px;
   min-height: 285px;
   margin: 0 16px 28px;
@@ -320,8 +313,7 @@ h2 {
   text-align: center;
 }
 
-.profile-avatar,
-.home-user-avatar {
+.identity-avatar {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -332,32 +324,32 @@ h2 {
   font-weight: 800;
 }
 
-.profile-avatar {
+.identity-avatar {
   width: 168px;
   height: 168px;
   margin: 0 auto 20px;
   font-size: 64px;
 }
 
-.profile-card:focus .profile-avatar {
+.identity-card:focus .identity-avatar {
   box-shadow: 0 0 0 6px var(--focus);
 }
 
-.profile-card strong,
-.profile-card small {
+.identity-card strong,
+.identity-card small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-card small {
+.identity-card small {
   margin-top: 8px;
   color: var(--muted);
   font-size: 17px;
 }
 
-.profile-provider-badges {
+.identity-provider-badge {
   min-height: 28px;
   margin-top: 11px;
 }
@@ -378,80 +370,38 @@ h2 {
 .provider-badge--plex { color: var(--plex); }
 .provider-badge--jellyfin { color: #c8a6ff; }
 
-.profile-picker-actions,
+.identity-picker-actions,
 .confirm-actions {
   display: flex;
   justify-content: center;
   margin-top: 18px;
 }
 
-.profile-picker-actions > * + *,
+.identity-picker-actions > * + *,
 .confirm-actions > * + * {
   margin-left: 20px;
 }
 
-.linked-account-list {
-  max-height: 250px;
-  margin: -10px 0 28px;
-  overflow-y: auto;
-}
-
-.linked-account-button {
-  width: 100%;
-  margin-bottom: 14px;
-  padding: 18px 24px;
-  border: 0;
-  border-radius: 13px;
-  background: rgba(229, 160, 13, .14);
-  text-align: left;
-}
-
-.linked-account-button strong,
-.linked-account-button small {
-  display: block;
-}
-
-.linked-account-button small {
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: 17px;
-}
-
-.home-user-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 22px;
-  max-height: 530px;
-  padding: 18px 8px;
-  overflow-y: auto;
-}
-
-.home-user-card {
-  min-height: 220px;
-  padding: 22px 14px;
-  border: 0;
-  border-radius: 18px;
-  background: var(--panel-soft);
-}
-
-.home-user-avatar {
-  width: 112px;
-  height: 112px;
-  margin: 0 auto 16px;
-  font-size: 40px;
-}
-
-.home-user-avatar img {
+.identity-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.home-user-card small {
-  display: block;
-  margin-top: 7px;
+.identity-empty,
+.identity-refresh-status,
+.empty-provider-copy {
   color: var(--muted);
-  font-size: 16px;
+  font-size: 18px;
+}
+
+.identity-empty {
+  margin: 18px auto -18px;
+}
+
+.identity-refresh-status {
+  min-height: 24px;
+  margin: -10px 0 4px;
 }
 
 .management-card {
@@ -463,10 +413,10 @@ h2 {
   margin: 20px 0 30px;
 }
 
-.management-row,
+.provider-management-row,
 .connection-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
   column-gap: 14px;
   align-items: center;
   margin-bottom: 16px;
@@ -580,7 +530,7 @@ h2 {
 }
 
 .connection-row {
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
 }
 
 .connection-row.is-current {

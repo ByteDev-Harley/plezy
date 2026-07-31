@@ -6,17 +6,19 @@ Version 2.10.2 adds Tizen 6-compatible full-screen positioning, resilient Plex h
 
 Version 2.10.3 streamlines TV navigation: home and episode cards play directly, shows automatically display seasons and offer Play First/Next/Resume Episode, seasons automatically display episodes, and episode selection starts playback without an extra detail page. D-pad navigation avoids smooth scrolling and expensive focus animation, home shelves render bounded card sets, and large libraries load 60 cards at a time.
 
-Samsung revision `2.10.5-samsung.7` adds launch profiles, reusable Plex Home accounts, profile-specific Jellyfin credentials, and validated profile/connection switching.
+Samsung revision `2.10.5-samsung.8` replaces local Plezy profiles with provider identities, moves Plex Home discovery and switching to Plex's v2 client API, and makes Nick Mode an app-wide preference.
 
 The navigation runtime builds its focus graph after each render, keeps geometry work out of D-pad key events, and explicitly loads artwork for the visible cards plus a small look-ahead window. The application and Samsung AVPlay display rectangle intentionally remain on the 1920×1080 logical TV canvas.
 
-The Samsung client has its own local Plezy profile layer. The profile picker is shown on every launch. A profile can hold multiple Plex or Jellyfin connections but opens one server at a time, keeping provider feeds, recommendations, progress, and watch-state calls isolated. Linked Plex accounts can be reused while each profile binding stores its selected Plex Home identity token; Jellyfin credentials remain independent. Profiles are convenience identities on the TV and are not a parental-security boundary.
+The provider identity picker is shown on every launch. Cached Plex Home users and saved Jellyfin logins appear immediately while linked Plex accounts refresh their Home users in the background. Selecting an identity reconnects its last available server or opens the server picker, keeping provider feeds, recommendations, progress, and watch-state calls isolated during switches.
 
-Each profile can independently enable Nick Mode from Settings. The preference changes only in-app branding, copy, and theme colors; the Samsung launcher icon and provider-specific colors remain unchanged.
+Plex parent-account tokens are used only to discover and switch Home users. Minted Home-user and server tokens are used for discovery and media requests. Settings can switch identities, manage servers, unlink a Plex parent account and its Home identities, or remove a saved Jellyfin login.
 
-Profile state is stored in `plezy-tv-profiles-v2`. On first launch after an upgrade, a valid `plezy-tv-session-v1` session is migrated to a `Default` profile; the old value is removed only after the new document is successfully read back. Provider access tokens still remain only in Tizen local storage.
+Nick Mode is global to the Samsung app and remains enabled when switching between Plex and Jellyfin identities. The preference changes only in-app branding, copy, and theme colors; the Samsung launcher icon and provider-specific colors remain unchanged.
 
-Runtime files are `config.xml`, `index.html`, `icon.png`, `nick-mode.png`, `css/app.css`, `js/profile-store.js`, `js/api.js`, `js/navigation.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
+Identity state is stored in `plezy-tv-identities-v3`. On first launch after an upgrade, the app transactionally migrates every Plex binding, Jellyfin account, saved server, last-used identity, and Nick Mode preference from `plezy-tv-profiles-v2` or `plezy-tv-session-v1`. Legacy storage is removed only after the v3 document is written and read back successfully. Provider access tokens remain only in Tizen local storage.
+
+Runtime files are `config.xml`, `index.html`, `icon.png`, `nick-mode.png`, `css/app.css`, `js/identity-store.js`, `js/api.js`, `js/navigation.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
 
 ## Local checks
 
@@ -27,7 +29,7 @@ npm test
 
 No npm dependencies are installed or shipped. The test suite uses Node's built-in test runner.
 
-Open `tests/tv-preview.html` at a 1920×1080 viewport to preview the launch picker. Add `?home`, `?libraries`, `?show`, or `?season` to preview the maintained content layouts. Use `?nick` for the Nick Mode picker or `?settings&nick` for the enabled Settings switch; the latter can be clicked to compare both modes while retaining focus. Emulate `prefers-reduced-motion: reduce` in browser developer tools to verify the logo animation is disabled.
+Open `tests/tv-preview.html` at a 1920×1080 viewport to preview the launch identity picker with Plex Home and Jellyfin identities. Add `?home`, `?libraries`, `?show`, or `?season` to preview the maintained content layouts. Use `?nick` for the Nick Mode picker or `?settings&nick` for the enabled Settings switch; the latter can be clicked to compare both modes while retaining focus. Emulate `prefers-reduced-motion: reduce` in browser developer tools to verify the logo animation is disabled.
 
 ## Navigation performance diagnostics
 

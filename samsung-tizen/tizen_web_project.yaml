@@ -35,7 +35,7 @@ files:
   - js/api.js
   - js/app.js
   - js/navigation.js
-  - js/profile-store.js
+  - js/identity-store.js
 
 # list of files to exclude based on the matched patterns
 excludes:

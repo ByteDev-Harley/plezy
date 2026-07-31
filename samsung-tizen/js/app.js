@@ -3,7 +3,7 @@
 
   var Api = window.PlezyTVApi;
   var Navigation = window.PlezyTVNavigation;
-  var Profiles = window.PlezyTVProfiles;
+  var Identities = window.PlezyTVIdentities;
   var STANDARD_LOGO_SOURCE = "icon.png";
   var NICK_MODE_LOGO_SOURCE = "nick-mode.png";
   var requestFrame = window.requestAnimationFrame
@@ -14,24 +14,17 @@
     : clearTimeout;
   var state = {
     client: null,
-    profileStore: null,
-    activeProfile: null,
-    activeBinding: null,
-    setupProfileId: "",
+    identityStore: null,
+    activeIdentity: null,
+    activeConnection: null,
     setupAccount: null,
-    setupClient: null,
-    setupAccountPersisted: false,
-    setupHomeUsers: [],
-    setupHomeUser: null,
-    setupIdentityToken: "",
     setupServers: [],
-    setupReturnScreen: "profile-picker",
-    profileFormMode: "create",
-    profileFormTarget: "",
+    setupReturnScreen: "identity-picker",
+    serverResolver: null,
+    providerRefreshRevision: 0,
     confirmAction: null,
-    confirmReturnScreen: "profile-picker",
+    confirmReturnScreen: "identity-picker",
     pinResolver: null,
-    pinReturnScreen: "profile-picker",
     activationRevision: 0,
     screen: "loading",
     route: "home",
@@ -87,8 +80,8 @@
     if (element) element.textContent = value === undefined || value === null ? "" : String(value);
   }
 
-  function applyProfileBranding(profile) {
-    var enabled = Boolean(profile && profile.nickMode === true);
+  function applyBranding(enabled) {
+    enabled = enabled === true;
     var appRoot = byId("app");
     if (appRoot) appRoot.classList.toggle("nick-mode", enabled);
     all(".main-logo").forEach(function (logo) {
@@ -97,19 +90,11 @@
       if (alternateText !== null) logo.setAttribute("alt", alternateText);
     });
     setText("loading-message", enabled ? "Summoning Nick…" : "Starting Plezy TV…");
-    setText("profile-picker-eyebrow", enabled ? "WHO’S NICKING?" : "WHO'S WATCHING?");
-    setText("provider-setup-eyebrow", enabled ? "NICK NEEDS A CONNECTION" : "ADD A CONNECTION");
+    setText("identity-picker-eyebrow", enabled ? "WHO’S NICKING?" : "WHO'S WATCHING?");
   }
 
-  function persistedLastUsedProfile() {
-    var profileId = state.profileStore && state.profileStore.document
-      ? state.profileStore.document.lastProfileId
-      : "";
-    return profileId ? state.profileStore.getProfile(profileId) : null;
-  }
-
-  function applyLastUsedProfileBranding() {
-    applyProfileBranding(persistedLastUsedProfile());
+  function applyGlobalBranding() {
+    applyBranding(Boolean(state.identityStore && state.identityStore.getNickMode()));
   }
 
   function show(element) { if (element) element.classList.remove("hidden"); }
@@ -175,20 +160,15 @@
     return error.message || String(error);
   }
 
-  function profileInitials(name) {
+  function identityInitials(name) {
     var words = String(name || "P").trim().split(/\s+/).filter(Boolean);
     if (!words.length) return "P";
     return (words[0].charAt(0) + (words.length > 1 ? words[words.length - 1].charAt(0) : "")).toUpperCase();
   }
 
-  function providerBadges(bindings) {
-    var seen = {};
-    return (bindings || []).map(function (binding) {
-      if (seen[binding.provider]) return "";
-      seen[binding.provider] = true;
-      return '<span class="provider-badge provider-badge--' + escapeHtml(binding.provider) + '">' +
-        escapeHtml(binding.provider) + "</span>";
-    }).join("");
+  function providerBadge(kind) {
+    return '<span class="provider-badge provider-badge--' + escapeHtml(kind) + '">' +
+      escapeHtml(kind) + "</span>";
   }
 
   function clearMediaNavigationState() {
@@ -216,31 +196,39 @@
       state.pinResolver = null;
       resolver(null);
     }
+    if (state.serverResolver) {
+      var serverResolver = state.serverResolver;
+      state.serverResolver = null;
+      serverResolver(null);
+    }
     if (state.player && state.player.teardown) state.player.teardown();
     clearMediaNavigationState();
     state.client = null;
-    state.activeProfile = null;
-    state.activeBinding = null;
+    state.activeIdentity = null;
+    state.activeConnection = null;
   }
 
-  function renderProfilePicker(error, focusProfileId) {
-    applyLastUsedProfileBranding();
-    var profiles = state.profileStore.getProfiles();
-    if (!profiles.length) {
-      showProfileEditor(null);
-      return;
-    }
-    var list = byId("profile-list");
-    list.innerHTML = profiles.map(function (profile) {
-      var bindings = state.profileStore.getBindings(profile.id);
-      return '<button class="profile-card" data-profile-id="' + escapeHtml(profile.id) +
-        '" data-focusable="true"><span class="profile-avatar">' + escapeHtml(profileInitials(profile.name)) +
-        '</span><strong>' + escapeHtml(profile.name) + '</strong><span class="profile-provider-badges">' +
-        providerBadges(bindings) + "</span><small>" +
-        escapeHtml(bindings.length ? bindings.length + (bindings.length === 1 ? " connection" : " connections") : "Set up a provider") +
-        "</small></button>";
+  function renderIdentityPicker(error, focusIdentityId, focusAction) {
+    applyGlobalBranding();
+    var identities = state.identityStore.getIdentities();
+    var list = byId("identity-list");
+    list.innerHTML = identities.map(function (identity) {
+      var connection = state.identityStore.chooseDefaultConnection(identity.id);
+      var avatar = identity.thumb
+        ? '<img src="' + escapeHtml(identity.thumb) + '" alt="">'
+        : escapeHtml(identityInitials(identity.name));
+      var subtitle = identity.provider === "plex"
+        ? (connection ? connection.name : (identity.protected ? "PIN protected" : "Choose a server"))
+        : (connection ? connection.name : "Saved login");
+      return '<button class="identity-card" data-identity-id="' + escapeHtml(identity.id) +
+        '" data-focusable="true"><span class="identity-avatar">' + avatar +
+        '</span><strong>' + escapeHtml(identity.name) + '</strong><span class="identity-provider-badge">' +
+        providerBadge(identity.provider) + "</span><small>" + escapeHtml(subtitle) + "</small></button>";
     }).join("");
-    var errorElement = byId("profile-picker-error");
+    var emptyElement = byId("identity-picker-empty");
+    if (identities.length) hide(emptyElement);
+    else show(emptyElement);
+    var errorElement = byId("identity-picker-error");
     if (error) {
       errorElement.textContent = friendlyError(error);
       show(errorElement);
@@ -248,101 +236,92 @@
       errorElement.textContent = "";
       hide(errorElement);
     }
-    showScreen("profile-picker");
-    if (focusProfileId) {
+    showScreen("identity-picker");
+    if (focusIdentityId || focusAction) {
       scheduleNavigationRefresh({
-        scope: byId("profile-picker-screen"),
-        attributes: { "data-profile-id": focusProfileId },
+        scope: byId("identity-picker-screen"),
+        attributes: focusIdentityId
+          ? { "data-identity-id": focusIdentityId }
+          : { "data-action": focusAction },
         preferAutofocus: false
       });
     }
   }
 
-  function openProfilePicker(error, focusProfileId) {
-    leaveActiveContext();
-    renderProfilePicker(error, focusProfileId);
-  }
-
-  function showProfileEditor(profile) {
-    state.profileFormMode = profile ? "rename" : "create";
-    state.profileFormTarget = profile ? profile.id : "";
-    setText("profile-name-eyebrow", profile ? "EDIT PROFILE" : "NEW PROFILE");
-    setText("profile-name-title", profile ? "Rename " + profile.name : "Create a profile");
-    setText("profile-name-submit", profile ? "Save" : "Continue");
-    byId("profile-name-input").value = profile ? profile.name : "";
-    hide(byId("profile-name-error"));
-    showScreen("profile-name");
-  }
-
-  function submitProfileName(event) {
-    event.preventDefault();
-    var name = byId("profile-name-input").value;
-    var errorElement = byId("profile-name-error");
-    try {
-      if (state.profileFormMode === "rename") {
-        state.profileStore.renameProfile(state.profileFormTarget, name);
-        renderProfileManagement(state.profileFormTarget);
-      } else {
-        var profile = state.profileStore.createProfile(name);
-        showProviderSetup(profile.id);
+  function refreshPlexIdentities() {
+    var accounts = state.identityStore.getPlexAccounts();
+    var revision = ++state.providerRefreshRevision;
+    if (!accounts.length) {
+      setText("identity-refresh-status", "");
+      return Promise.resolve([]);
+    }
+    setText("identity-refresh-status", "Refreshing Plex Home…");
+    return Promise.all(accounts.map(function (account) {
+      var client = new Api.PlexClient({ accountToken: account.token });
+      return client.getHomeUsers().then(function (users) {
+        if (revision !== state.providerRefreshRevision) return [];
+        state.identityStore.syncPlexHomeUsers(account.id, users, { prune: true });
+        return users;
+      }).catch(function (error) {
+        return { account: account, error: error };
+      });
+    })).then(function (results) {
+      if (revision !== state.providerRefreshRevision) return results;
+      var failures = results.filter(function (result) { return result && result.error; });
+      setText("identity-refresh-status", failures.length
+        ? "Some Plex Home users could not be refreshed. Cached identities are still available."
+        : "Plex Home is up to date.");
+      if (state.screen === "identity-picker") {
+        var focusedIdentity = document.activeElement && document.activeElement.getAttribute
+          ? document.activeElement.getAttribute("data-identity-id")
+          : "";
+        var focusedAction = document.activeElement && document.activeElement.getAttribute
+          ? document.activeElement.getAttribute("data-action")
+          : "";
+        renderIdentityPicker(null, focusedIdentity, focusedAction);
       }
-    } catch (error) {
-      errorElement.textContent = friendlyError(error);
-      show(errorElement);
-      focusFirst(byId("profile-name-screen"));
-    }
+      return results;
+    });
   }
 
-  function showProviderSetup(profileId, error, returnScreen) {
-    var profile = state.profileStore.getProfile(profileId);
-    if (!profile) {
-      renderProfilePicker(new Error("That profile is no longer available."));
-      return;
-    }
-    applyProfileBranding(profile);
-    state.setupProfileId = profileId;
-    state.setupAccount = null;
-    state.setupClient = null;
-    state.setupAccountPersisted = false;
-    state.setupHomeUsers = [];
-    state.setupHomeUser = null;
-    state.setupIdentityToken = "";
-    state.setupServers = [];
-    state.setupReturnScreen = returnScreen || (state.activeProfile ? "browse" : "profile-picker");
-    setText("provider-setup-title", "Connect " + profile.name);
-    var accounts = state.profileStore.getAccounts("plex");
-    setText("plex-connect", accounts.length ? "Link another Plex account" : "Connect Plex");
-    byId("linked-plex-accounts").innerHTML = accounts.length
-      ? '<p class="eyebrow">LINKED PLEX ACCOUNTS</p>' + accounts.map(function (account) {
-        return '<button class="linked-account-button" data-plex-account-id="' + escapeHtml(account.id) +
-          '" data-focusable="true"><strong>Use ' + escapeHtml(account.name) +
-          '</strong><small>Choose a different Plex Home user or server</small></button>';
-      }).join("")
-      : "";
-    if (error) toast(friendlyError(error), 6500);
-    showScreen("welcome");
+  function openIdentityPicker(error, focusIdentityId) {
+    leaveActiveContext();
+    renderIdentityPicker(error, focusIdentityId);
+    refreshPlexIdentities();
   }
 
-  function renderProfileManagement(focusProfileId) {
-    if (!state.activeProfile) applyLastUsedProfileBranding();
-    var profiles = state.profileStore.getProfiles();
-    if (!profiles.length) {
-      showProfileEditor(null);
-      return;
-    }
-    byId("profile-manage-list").innerHTML = profiles.map(function (profile) {
-      var bindings = state.profileStore.getBindings(profile.id);
-      return '<div class="management-row"><div class="management-copy"><strong>' + escapeHtml(profile.name) +
-        '</strong><small>' + escapeHtml(bindings.length + (bindings.length === 1 ? " connection" : " connections")) +
-        '</small></div><button class="small-button" data-profile-rename="' + escapeHtml(profile.id) +
-        '" data-focusable="true">Rename</button><button class="small-button small-button--danger" data-profile-delete="' +
-        escapeHtml(profile.id) + '" data-focusable="true">Delete</button></div>';
-    }).join("");
-    showScreen("profile-manage");
-    if (focusProfileId) {
+  function renderProviderManagement(focusValue) {
+    applyGlobalBranding();
+    var accounts = state.identityStore.getPlexAccounts();
+    var jellyfin = state.identityStore.getIdentities("jellyfin");
+    var rows = accounts.map(function (account) {
+      var homeCount = state.identityStore.getIdentities("plex").filter(function (identity) {
+        return identity.plexAccountId === account.id;
+      }).length;
+      return '<div class="provider-management-row"><div class="management-copy"><strong>' +
+        escapeHtml(account.name) + '</strong><small>Plex · ' + homeCount +
+        (homeCount === 1 ? " Home user" : " Home users") +
+        '</small></div><button class="small-button small-button--danger" data-plex-unlink="' +
+        escapeHtml(account.id) + '" data-focusable="true">Unlink</button></div>';
+    }).concat(jellyfin.map(function (identity) {
+      var connection = state.identityStore.chooseDefaultConnection(identity.id);
+      return '<div class="provider-management-row"><div class="management-copy"><strong>' +
+        escapeHtml(identity.name) + '</strong><small>Jellyfin · ' +
+        escapeHtml(connection ? connection.name : identity.baseUrl) +
+        '</small></div><button class="small-button small-button--danger" data-jellyfin-remove="' +
+        escapeHtml(identity.id) + '" data-focusable="true">Remove</button></div>';
+    }));
+    byId("provider-manage-list").innerHTML = rows.length
+      ? rows.join("")
+      : '<p class="empty-provider-copy">No providers are connected yet.</p>';
+    setText("plex-connect-manage", accounts.length ? "Link another Plex account" : "Connect Plex");
+    showScreen("provider-manage");
+    if (focusValue) {
       scheduleNavigationRefresh({
-        scope: byId("profile-manage-screen"),
-        attributes: { "data-profile-rename": focusProfileId },
+        scope: byId("provider-manage-screen"),
+        attributes: focusValue.provider === "plex"
+          ? { "data-plex-unlink": focusValue.id }
+          : { "data-jellyfin-remove": focusValue.id },
         preferAutofocus: false
       });
     }
@@ -360,11 +339,11 @@
   function cancelConfirmation() {
     var destination = state.confirmReturnScreen;
     state.confirmAction = null;
-    if (destination === "profile-manage") renderProfileManagement();
+    if (destination === "provider-manage") renderProviderManagement();
     else if (destination === "browse") {
       showScreen("browse");
       routeSettings();
-    } else renderProfilePicker();
+    } else renderIdentityPicker();
   }
 
   function confirmAction() {
@@ -373,22 +352,40 @@
     if (action) action();
   }
 
-  function deleteProfile(profileId) {
-    var profile = state.profileStore.getProfile(profileId);
-    if (!profile) return;
+  function unlinkPlexAccount(accountId) {
+    var account = state.identityStore.getPlexAccount(accountId);
+    if (!account) return;
     showConfirmation(
-      "Delete " + profile.name + "?",
-      "This removes this profile's connections and Jellyfin credentials. A linked Plex account stays available only while another profile uses it.",
-      "Delete profile",
+      "Unlink " + account.name + "?",
+      "This removes the linked parent account, its cached Plex Home identities, and all of their saved server sessions.",
+      "Unlink Plex",
       function () {
-        var deletedActiveProfile = Boolean(state.activeProfile && state.activeProfile.id === profileId);
-        if (deletedActiveProfile) leaveActiveContext();
-        state.profileStore.deleteProfile(profileId);
-        if (deletedActiveProfile) applyLastUsedProfileBranding();
-        if (state.profileStore.getProfiles().length) renderProfileManagement();
-        else showProfileEditor(null);
+        var removesActive = Boolean(state.activeIdentity && state.activeIdentity.provider === "plex" &&
+          state.activeIdentity.plexAccountId === accountId);
+        if (removesActive) leaveActiveContext();
+        state.identityStore.unlinkPlexAccount(accountId);
+        if (removesActive) renderIdentityPicker();
+        else renderProviderManagement();
       },
-      "profile-manage"
+      "provider-manage"
+    );
+  }
+
+  function removeJellyfinIdentity(identityId) {
+    var identity = state.identityStore.getIdentity(identityId);
+    if (!identity || identity.provider !== "jellyfin") return;
+    showConfirmation(
+      "Remove " + identity.name + "?",
+      "This removes the saved Jellyfin login and its local server session.",
+      "Remove Jellyfin",
+      function () {
+        var removesActive = Boolean(state.activeIdentity && state.activeIdentity.id === identityId);
+        if (removesActive) leaveActiveContext();
+        state.identityStore.removeJellyfinIdentity(identityId);
+        if (removesActive) renderIdentityPicker();
+        else renderProviderManagement();
+      },
+      "provider-manage"
     );
   }
 
@@ -516,7 +513,7 @@
     state.currentPlayTarget = null;
     state.detailStack = [];
     showScreen("browse");
-    setText("connection-badge", (state.activeProfile ? state.activeProfile.name + " · " : "") + providerName() + " · " + serverName());
+    setText("connection-badge", (state.activeIdentity ? state.activeIdentity.name + " · " : "") + providerName() + " · " + serverName());
     routeHome();
   }
 
@@ -603,12 +600,12 @@
       if (client !== state.client || contextRevision !== state.activationRevision || state.route !== "libraries" || revision !== state.contentRevision) return;
       state.libraries = results[0];
       if (providerName() === "Plex" && results[1].length) state.pendingServers = results[1];
-      if (providerName() === "Plex" && state.activeBinding) {
-        state.profileStore.updateBindingSession(state.activeBinding.id, state.client.toSession(), {
+      if (providerName() === "Plex" && state.activeConnection) {
+        state.identityStore.updateConnectionSession(state.activeConnection.id, state.client.toSession(), {
           identityToken: state.client.identityToken,
           serverId: state.client.server && state.client.server.id
         });
-        state.activeBinding = state.profileStore.getBinding(state.activeBinding.id);
+        state.activeConnection = state.identityStore.getConnection(state.activeConnection.id);
       }
       renderLibrariesPage(state.libraries);
     }).catch(function (error) {
@@ -621,7 +618,7 @@
     if (!server || providerName() !== "Plex") return;
     if (state.client.server && server.id === state.client.server.id) return;
     var previousSession = state.client.toSession();
-    var previousBinding = state.activeBinding;
+    var previousConnection = state.activeConnection;
     if (state.player && state.player.teardown) state.player.teardown();
     clearMediaNavigationState();
     var revision = state.contentRevision;
@@ -630,20 +627,23 @@
     state.client.getLibraries().then(function (libraries) {
       if (revision !== state.contentRevision) return;
       state.libraries = libraries;
-      if (state.activeBinding) {
-        state.profileStore.updateBindingSession(state.activeBinding.id, state.client.toSession(), {
+      if (state.activeIdentity) {
+        state.activeConnection = state.identityStore.upsertConnection(state.activeIdentity.id, {
+          provider: "plex",
+          name: server.name,
           identityToken: state.client.identityToken,
-          serverId: state.client.server && state.client.server.id
+          serverId: state.client.server && state.client.server.id,
+          session: state.client.toSession()
         });
-        state.profileStore.touchConnection(state.activeProfile.id, state.activeBinding.id);
-        state.activeBinding = state.profileStore.getBinding(state.activeBinding.id);
+        state.identityStore.setDefaultConnection(state.activeIdentity.id, state.activeConnection.id);
+        state.identityStore.touchIdentity(state.activeIdentity.id, state.activeConnection.id);
       }
       openBrowse();
       toast("Connected to " + server.name + ".", 2800);
     }).catch(function (error) {
       if (revision !== state.contentRevision) return;
       state.client = Api.clientFromSession(previousSession);
-      state.activeBinding = previousBinding;
+      state.activeConnection = previousConnection;
       state.pendingServers = state.client && state.client.servers ? state.client.servers.slice() : [];
       showScreen("browse");
       routeLibraries();
@@ -723,28 +723,22 @@
   function routeSettings(focusNickModeSwitch) {
     setActiveRoute("settings");
     state.contentRevision += 1;
-    setPage("Settings", state.activeProfile ? state.activeProfile.name : providerName());
-    var nickModeEnabled = Boolean(state.activeProfile && state.activeProfile.nickMode === true);
-    var bindings = state.activeProfile ? state.profileStore.getBindings(state.activeProfile.id) : [];
-    var connectionRows = bindings.map(function (binding) {
-      var current = state.activeBinding && binding.id === state.activeBinding.id;
-      var account = state.profileStore.getAccount(binding.accountId);
-      var identity = binding.provider === "plex" && binding.homeUser
-        ? (binding.homeUser.title || "Plex user")
-        : (account && account.name || providerName());
+    setPage("Settings", state.activeIdentity ? state.activeIdentity.name : providerName());
+    var nickModeEnabled = state.identityStore.getNickMode();
+    var connections = state.activeIdentity ? state.identityStore.getConnections(state.activeIdentity.id) : [];
+    var connectionRows = connections.map(function (connection) {
+      var current = state.activeConnection && connection.id === state.activeConnection.id;
       return '<div class="connection-row' + (current ? " is-current" : "") +
-        '"><div class="connection-copy"><strong>' + escapeHtml(binding.name) +
-        '</strong><small>' + escapeHtml((binding.provider === "plex" ? "Plex" : "Jellyfin") + " · " + identity +
-          (current ? " · Connected" : "")) + '</small></div><button class="small-button" data-connection-switch="' +
-        escapeHtml(binding.id) + '" data-focusable="true"' + (current ? " disabled" : "") + '>Use</button>' +
-        '<button class="small-button small-button--danger" data-connection-remove="' + escapeHtml(binding.id) +
-        '" data-focusable="true">Remove</button></div>';
+        '"><div class="connection-copy"><strong>' + escapeHtml(connection.name) +
+        '</strong><small>' + escapeHtml(providerName() + (current ? " · Connected" : " · Saved server")) +
+        '</small></div><button class="small-button" data-connection-switch="' +
+        escapeHtml(connection.id) + '" data-focusable="true"' + (current ? " disabled" : "") + '>Use</button></div>';
     }).join("");
     setBody(
-      '<section class="settings-panel"><p class="eyebrow">ACTIVE PROFILE</p><h2>' +
-      escapeHtml(state.activeProfile ? state.activeProfile.name : "Profile") + '</h2><button class="button" ' +
-      'data-action="switch-profile" data-focusable="true">Switch profile</button> ' +
-      '<button class="button" data-action="manage-profiles" data-focusable="true">Manage profiles</button></section>' +
+      '<section class="settings-panel"><p class="eyebrow">ACTIVE IDENTITY</p><h2>' +
+      escapeHtml(state.activeIdentity ? state.activeIdentity.name : "Identity") + '</h2><button class="button" ' +
+      'data-action="switch-identity" data-focusable="true">Switch identity</button> ' +
+      '<button class="button" data-action="manage-providers" data-focusable="true">Manage providers</button></section>' +
       '<section class="settings-panel"><p class="eyebrow">APPEARANCE</p><div class="nick-mode-setting">' +
       '<div class="nick-mode-copy"><h2>Nick Mode</h2><p id="nick-mode-status" class="status-text">' +
       escapeHtml(nickModeEnabled ? "Maximum Nick achieved." : "Plezy branding is active.") +
@@ -753,10 +747,10 @@
       (nickModeEnabled ? "true" : "false") + '" data-action="toggle-nick-mode" data-focusable="true">' +
       '<span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>' +
       '<span class="switch-label">' + (nickModeEnabled ? "On" : "Off") + '</span></button></div></section>' +
-      '<section class="settings-panel"><p class="eyebrow">CONNECTIONS</p><h2>Servers and providers</h2>' +
-      connectionRows + '<button class="button button--primary" data-action="add-connection" ' +
-      'data-focusable="true">＋ Add connection</button>' +
-      '<p class="privacy-note">Provider credentials remain in this TV app\'s local storage and are removed when no profile references them.</p></section>'
+      '<section class="settings-panel"><p class="eyebrow">CONNECTION</p><h2>Saved server' +
+      (connections.length === 1 ? "" : "s") + '</h2>' + connectionRows +
+      (providerName() === "Plex" ? '<button class="button button--primary" data-route="libraries" data-focusable="true">Choose Plex server</button>' : "") +
+      '<p class="privacy-note">Provider credentials stay in this TV app\'s local storage until their provider account or saved login is removed.</p></section>'
     );
     if (focusNickModeSwitch) {
       scheduleNavigationRefresh({
@@ -770,11 +764,10 @@
   }
 
   function toggleNickMode() {
-    if (!state.activeProfile) return;
-    var enabled = state.activeProfile.nickMode !== true;
+    var enabled = !state.identityStore.getNickMode();
     try {
-      state.activeProfile = state.profileStore.setNickMode(state.activeProfile.id, enabled);
-      applyProfileBranding(state.activeProfile);
+      state.identityStore.setNickMode(enabled);
+      applyBranding(enabled);
       routeSettings(true);
       toast(enabled ? "Nick Mode engaged." : "Nick Mode disengaged.");
     } catch (error) {
@@ -915,12 +908,13 @@
     });
   }
 
-  function beginPlexLink() {
+  function beginPlexLink(preserveReturnScreen) {
     clearInterval(state.pinTimer);
+    if (preserveReturnScreen !== true) {
+      state.setupReturnScreen = state.screen === "provider-manage" ? "provider-manage" : "identity-picker";
+    }
     var client = new Api.PlexClient();
-    state.setupClient = client;
     state.setupAccount = null;
-    state.setupAccountPersisted = false;
     hide(byId("plex-link-retry"));
     setText("plex-code", "––––");
     setText("plex-link-status", "Requesting a link code…");
@@ -951,14 +945,12 @@
       clearInterval(state.pinTimer);
       client.token = pin.authToken;
       client.accountToken = pin.authToken;
-      client.identityToken = pin.authToken;
-      state.setupAccount = {
-        provider: "plex",
+      state.setupAccount = state.identityStore.upsertPlexAccount({
         name: "Plex account",
         token: pin.authToken
-      };
+      });
       setText("plex-link-status", "Signed in. Loading Plex Home…");
-      return loadPlexHomeUsers(client, state.setupAccount, false);
+      return finishPlexLink(client, state.setupAccount);
     }).catch(function (error) {
       if (error && (error.status === 401 || error.status === 404)) return;
       clearInterval(state.pinTimer);
@@ -972,60 +964,39 @@
     focusFirst(byId("plex-link-screen"));
   }
 
-  function useLinkedPlexAccount(accountId) {
-    var account = state.profileStore.getAccount(accountId);
-    if (!account || account.provider !== "plex") {
-      showProviderSetup(state.setupProfileId, new Error("That linked Plex account is unavailable."), state.setupReturnScreen);
-      return;
-    }
-    var client = new Api.PlexClient({ accountToken: account.token, identityToken: account.token });
-    loadPlexHomeUsers(client, account, true);
-  }
-
-  function loadPlexHomeUsers(client, account, persisted) {
-    state.setupClient = client;
-    state.setupAccount = account;
-    state.setupAccountPersisted = persisted;
+  function finishPlexLink(client, account) {
     setLoading("Loading Plex Home users…");
     return client.getHomeUsers().then(function (users) {
-      if (!persisted) {
-        var owner = users.filter(function (user) { return user.admin; })[0] || users[0];
-        if (owner) {
-          state.setupAccount.name = owner.title + " · Plex";
-          state.setupAccount.username = owner.username || "";
-        }
+      var owner = users.filter(function (user) { return user.admin; })[0] || users[0];
+      if (owner) {
+        account = state.identityStore.upsertPlexAccount({
+          id: account.id,
+          accountId: owner.id,
+          name: owner.title + " · Plex",
+          username: owner.username,
+          thumb: owner.thumb,
+          token: account.token
+        });
       }
-      state.setupHomeUsers = users;
-      renderPlexHomeUsers();
+      state.identityStore.syncPlexHomeUsers(account.id, users, { prune: true });
+      var identity = state.identityStore.getIdentities("plex").filter(function (candidate) {
+        return candidate.plexAccountId === account.id && owner && candidate.homeUser.uuid === owner.uuid;
+      })[0];
+      if (state.setupReturnScreen === "provider-manage") renderProviderManagement({ provider: "plex", id: account.id });
+      else renderIdentityPicker(null, identity && identity.id);
+      toast("Plex account connected.", 2800);
     }).catch(function (error) {
-      showProviderSetup(state.setupProfileId, error, state.setupReturnScreen);
+      if (state.setupReturnScreen === "provider-manage") {
+        renderProviderManagement({ provider: "plex", id: account.id });
+        toast("Plex Home could not be loaded: " + friendlyError(error), 7000);
+      } else {
+        renderIdentityPicker(error);
+      }
     });
   }
 
-  function renderPlexHomeUsers(focusUuid) {
-    byId("plex-home-list").innerHTML = state.setupHomeUsers.map(function (user, index) {
-      var avatar = user.thumb
-        ? '<img src="' + escapeHtml(user.thumb) + '" alt="">'
-        : escapeHtml(profileInitials(user.title));
-      return '<button class="home-user-card" data-home-user="' + index + '" data-home-user-id="' +
-        escapeHtml(user.uuid) + '" data-focusable="true"><span class="home-user-avatar">' + avatar +
-        '</span><strong>' + escapeHtml(user.title) + '</strong><small>' +
-        (user.protected ? "PIN protected" : "Ready to use") + "</small></button>";
-    }).join("");
-    hide(byId("plex-home-error"));
-    showScreen("plex-home");
-    if (focusUuid) {
-      scheduleNavigationRefresh({
-        scope: byId("plex-home-screen"),
-        attributes: { "data-home-user-id": focusUuid },
-        preferAutofocus: false
-      });
-    }
-  }
-
-  function requestPlexPin(user, error, returnScreen) {
+  function requestPlexPin(user, error) {
     if (state.pinResolver) state.pinResolver(null);
-    state.pinReturnScreen = returnScreen || "activation";
     setText("plex-pin-title", "Unlock " + (user && user.title || "Plex user"));
     byId("plex-home-pin").value = "";
     var errorElement = byId("plex-pin-error");
@@ -1056,71 +1027,22 @@
     var resolver = state.pinResolver;
     state.pinResolver = null;
     if (resolver) {
-      setLoading("Cancelling profile activation…");
+      setLoading("Cancelling identity activation…");
       resolver(null);
       return;
     }
-    if (state.pinReturnScreen === "plex-home") renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
-    else renderProfilePicker();
+    renderIdentityPicker();
   }
 
-  function choosePlexHomeUser(index) {
-    var user = state.setupHomeUsers[index];
-    if (!user || !state.setupClient) return;
-    state.setupHomeUser = user;
-    if (user.protected) {
-      promptSetupPlexPin(null);
-      return;
-    }
-    activateSetupHomeUser("").catch(function (error) {
-      var errorElement = byId("plex-home-error");
-      errorElement.textContent = friendlyError(error);
-      show(errorElement);
-      renderPlexHomeUsers(user.uuid);
-      show(errorElement);
-    });
-  }
-
-  function promptSetupPlexPin(error) {
-    requestPlexPin(state.setupHomeUser, error, "plex-home").then(function (pin) {
-      if (pin === null) {
-        renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
-        return;
-      }
-      activateSetupHomeUser(pin).catch(function (switchError) {
-        if (switchError && switchError.isPinError) promptSetupPlexPin(switchError);
-        else {
-          renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
-          var errorElement = byId("plex-home-error");
-          errorElement.textContent = friendlyError(switchError);
-          show(errorElement);
-        }
-      });
-    });
-  }
-
-  function switchSetupHomeUser(pin, retried) {
-    var client = state.setupClient;
-    return client.switchHomeUser(state.setupHomeUser.uuid, pin).then(function (switched) {
-      state.setupIdentityToken = switched.token;
-      return client.getServers(switched.token);
-    }).catch(function (error) {
-      if (!retried && error && (error.status === 401 || error.status === 403) && !error.isPinError) {
-        return switchSetupHomeUser(pin, true);
-      }
-      throw error;
-    });
-  }
-
-  function activateSetupHomeUser(pin) {
-    setLoading("Finding servers for " + state.setupHomeUser.title + "…");
-    return switchSetupHomeUser(pin, false).then(function (servers) {
-      if (!servers.length) throw new Error("No Plex Media Server is available to this Home user.");
-      state.setupServers = servers;
-      if (servers.length === 1) return choosePlexServer(0);
-      renderPlexServers();
-      return true;
-    });
+  function requestPlexServer(servers, identity, reason) {
+    if (state.serverResolver) state.serverResolver(null);
+    state.setupServers = servers;
+    setText("server-title", reason === "unavailable" ? "Choose another server" : "Choose a server");
+    setText("server-copy", reason === "unavailable"
+      ? "The last server saved for " + identity.name + " is unavailable."
+      : "Select the Plex server " + identity.name + " should use.");
+    renderPlexServers();
+    return new Promise(function (resolve) { state.serverResolver = resolve; });
   }
 
   function renderPlexServers() {
@@ -1134,38 +1056,22 @@
 
   function choosePlexServer(index) {
     var server = state.setupServers[index];
-    var client = state.setupClient;
-    if (!server || !client || !state.setupHomeUser) return;
-    client.connect(server);
+    var resolver = state.serverResolver;
+    if (!server || !resolver) return;
+    state.serverResolver = null;
     setLoading("Connecting to " + server.name + "…");
-    client.getLibraries().then(function (libraries) {
-      var account = state.setupAccount;
-      if (!state.setupAccountPersisted) {
-        account = state.profileStore.upsertAccount({
-          provider: "plex",
-          name: account.name || "Plex account",
-          token: account.token,
-          username: account.username || ""
-        });
-        state.setupAccount = account;
-        state.setupAccountPersisted = true;
-      }
-      var binding = state.profileStore.bindConnection(state.setupProfileId, {
-        accountId: account.id,
-        provider: "plex",
-        name: server.name,
-        identityToken: state.setupIdentityToken || client.identityToken,
-        homeUser: state.setupHomeUser,
-        protected: state.setupHomeUser.protected,
-        serverId: server.id,
-        session: client.toSession()
-      });
-      state.profileStore.setDefaultConnection(state.setupProfileId, binding.id);
-      enterActiveConnection(state.profileStore.getProfile(state.setupProfileId), binding, client, libraries);
-    }).catch(function (error) {
-      toast(friendlyError(error), 7000);
-      renderPlexServers();
-    });
+    resolver(server);
+  }
+
+  function cancelPlexServer() {
+    var resolver = state.serverResolver;
+    state.serverResolver = null;
+    if (resolver) {
+      setLoading("Cancelling identity activation…");
+      resolver(null);
+      return;
+    }
+    renderIdentityPicker();
   }
 
   function jellyfinLogin(event) {
@@ -1179,22 +1085,12 @@
     Api.JellyfinClient.authenticate(url, username, password).then(function (client) {
       return client.getLibraries().then(function (libraries) {
         var session = client.toSession();
-        var account = state.profileStore.upsertAccount({
-          provider: "jellyfin",
+        var identity = state.identityStore.upsertJellyfinIdentity({
           name: (session.server && session.server.username) || username,
-          token: session.token,
-          baseUrl: session.baseUrl,
-          userId: session.userId,
-          server: session.server
-        });
-        var binding = state.profileStore.bindConnection(state.setupProfileId, {
-          accountId: account.id,
-          provider: "jellyfin",
-          name: session.server && session.server.name || "Jellyfin",
           session: session
         });
-        state.profileStore.setDefaultConnection(state.setupProfileId, binding.id);
-        enterActiveConnection(state.profileStore.getProfile(state.setupProfileId), binding, client, libraries);
+        var connection = state.identityStore.chooseDefaultConnection(identity.id);
+        enterActiveIdentity(identity, connection, client, libraries);
       });
     }).catch(function (error) {
       showScreen("jellyfin-login");
@@ -1204,130 +1100,99 @@
     });
   }
 
-  function enterActiveConnection(profile, binding, client, libraries) {
+  function enterActiveIdentity(identity, connection, client, libraries) {
     if (state.player && state.player.teardown) state.player.teardown();
     state.activationRevision += 1;
     clearMediaNavigationState();
     state.client = client;
-    state.activeProfile = profile;
-    state.activeBinding = binding;
+    state.activeIdentity = identity;
+    state.activeConnection = connection;
     state.libraries = libraries || [];
     state.pendingServers = client && client.servers ? client.servers.slice() : [];
-    state.profileStore.touchConnection(profile.id, binding.id);
-    state.activeProfile = state.profileStore.getProfile(profile.id);
-    state.activeBinding = state.profileStore.getBinding(binding.id);
-    applyProfileBranding(state.activeProfile);
-    state.setupClient = null;
+    state.identityStore.touchIdentity(identity.id, connection && connection.id);
+    state.activeIdentity = state.identityStore.getIdentity(identity.id);
+    state.activeConnection = connection ? state.identityStore.getConnection(connection.id) : null;
+    applyGlobalBranding();
     state.setupAccount = null;
-    state.setupHomeUser = null;
     state.setupServers = [];
     openBrowse();
   }
 
-  function activateStoredConnection(profileId, bindingId, rollback) {
-    var profile = state.profileStore.getProfile(profileId);
-    var binding = state.profileStore.getBinding(bindingId);
-    var account = binding && state.profileStore.getAccount(binding.accountId);
+  function activateStoredIdentity(identityId, connectionId, rollback) {
+    var resolved = state.identityStore.resolveIdentity(identityId, connectionId);
+    var identity = resolved && resolved.identity;
+    var connection = resolved && resolved.connection;
+    var account = resolved && resolved.account;
     var previous = rollback ? {
-      profile: state.activeProfile,
-      binding: state.activeBinding,
+      identity: state.activeIdentity,
+      connection: state.activeConnection,
       client: state.client
     } : null;
     leaveActiveContext();
-    applyProfileBranding(profile);
+    applyGlobalBranding();
     var revision = state.activationRevision;
-    setLoading("Opening " + (profile ? profile.name : "profile") + "…");
-    Api.activateConnection(profile, binding, account, {
-      requestPin: function (homeUser, error) { return requestPlexPin(homeUser, error, "activation"); }
+    setLoading("Opening " + (identity ? identity.name : "identity") + "…");
+    Api.activateIdentity(identity, connection, account, {
+      requestPin: function (homeUser, error) { return requestPlexPin(homeUser, error); },
+      chooseServer: requestPlexServer
     }).then(function (result) {
       if (revision !== state.activationRevision) return;
       if (!result.ok) {
         if (previous && previous.client) {
           state.client = previous.client;
-          state.activeProfile = previous.profile;
-          state.activeBinding = previous.binding;
+          state.activeIdentity = previous.identity;
+          state.activeConnection = previous.connection;
           state.pendingServers = previous.client.servers ? previous.client.servers.slice() : [];
-          applyProfileBranding(previous.profile);
+          applyGlobalBranding();
           showScreen("browse");
           routeSettings();
           scheduleNavigationRefresh({
             scope: byId("content-body"),
-            attributes: { "data-connection-switch": bindingId },
+            attributes: { "data-connection-switch": connectionId },
             preferAutofocus: false
           });
           if (!result.error.cancelled) toast("Could not switch connections: " + result.error.message, 7000);
           return;
         }
-        renderProfilePicker(result.error.cancelled ? null : new Error(
-          result.error.message + " Select the profile to retry, or use Manage profiles to remove and set it up again."
-        ), profileId);
+        renderIdentityPicker(result.error.cancelled ? null : new Error(
+          result.error.message + " Select the identity to retry, or use Manage providers to reconnect it."
+        ), identityId);
         return;
       }
-      if (result.binding && binding.provider === "plex") {
-        state.profileStore.updateBindingSession(binding.id, result.session, {
-          identityToken: result.binding.identityToken,
-          homeUser: result.binding.homeUser,
-          serverId: result.binding.serverId
+      if (identity.provider === "plex") {
+        identity = state.identityStore.updatePlexIdentity(identity.id, {
+          identityToken: result.identity.identityToken,
+          homeUser: result.identity.homeUser
         });
-        binding = state.profileStore.getBinding(binding.id);
+        connection = state.identityStore.upsertConnection(identity.id, result.connection);
+        state.identityStore.setDefaultConnection(identity.id, connection.id);
+      } else if (result.connection) {
+        connection = state.identityStore.updateConnectionSession(result.connection.id, result.session);
       }
-      enterActiveConnection(profile, binding, result.client, result.validation || []);
+      enterActiveIdentity(identity, connection, result.client, result.validation || []);
     });
   }
 
-  function selectProfile(profileId) {
-    var profile = state.profileStore.getProfile(profileId);
-    if (!profile) {
-      renderProfilePicker(new Error("That profile is no longer available."));
+  function selectIdentity(identityId) {
+    var identity = state.identityStore.getIdentity(identityId);
+    if (!identity) {
+      renderIdentityPicker(new Error("That identity is no longer available."));
       return;
     }
-    applyProfileBranding(profile);
-    var binding = state.profileStore.chooseDefaultConnection(profileId);
-    if (!binding) {
-      leaveActiveContext();
-      showProviderSetup(profileId, null, "profile-picker");
-      return;
-    }
-    activateStoredConnection(profileId, binding.id, false);
+    var connection = state.identityStore.chooseDefaultConnection(identityId);
+    activateStoredIdentity(identityId, connection && connection.id, false);
   }
 
-  function switchConnection(bindingId) {
-    if (!state.activeProfile || state.activeBinding && state.activeBinding.id === bindingId) return;
-    activateStoredConnection(state.activeProfile.id, bindingId, true);
+  function switchConnection(connectionId) {
+    if (!state.activeIdentity || state.activeConnection && state.activeConnection.id === connectionId) return;
+    activateStoredIdentity(state.activeIdentity.id, connectionId, true);
   }
 
-  function removeConnection(bindingId) {
-    var binding = state.profileStore.getBinding(bindingId);
-    if (!binding || !state.activeProfile || binding.profileId !== state.activeProfile.id) return;
-    showConfirmation(
-      "Remove " + binding.name + "?",
-      "This removes the saved provider credential when no other profile connection uses it.",
-      "Remove connection",
-      function () {
-        var wasActive = state.activeBinding && state.activeBinding.id === bindingId;
-        state.profileStore.unbindConnection(state.activeProfile.id, bindingId);
-        if (!wasActive) {
-          showScreen("browse");
-          routeSettings();
-          return;
-        }
-        var profileId = state.activeProfile.id;
-        var replacement = state.profileStore.chooseDefaultConnection(profileId);
-        leaveActiveContext();
-        if (replacement) activateStoredConnection(profileId, replacement.id, false);
-        else showProviderSetup(profileId, null, "profile-picker");
-      },
-      "browse"
-    );
-  }
-
-  function restoreProfiles() {
-    var profileDocument = state.profileStore.migrateLegacy();
-    var lastUsedProfile = profileDocument.lastProfileId
-      ? state.profileStore.getProfile(profileDocument.lastProfileId)
-      : null;
-    applyProfileBranding(lastUsedProfile);
-    renderProfilePicker();
+  function restoreIdentities() {
+    state.identityStore.migrate();
+    applyGlobalBranding();
+    renderIdentityPicker();
+    refreshPlexIdentities();
   }
 
   function formatTime(ms) {
@@ -1665,46 +1530,28 @@
       cancelPlexPin();
       return;
     }
-    if (state.screen === "profile-name") {
-      if (state.profileFormMode === "rename") renderProfileManagement(state.profileFormTarget);
-      else if (state.profileStore.getProfiles().length) renderProfilePicker();
-      else exitApplication();
-      return;
-    }
-    if (state.screen === "profile-manage") {
-      if (state.activeProfile && state.client) {
+    if (state.screen === "provider-manage") {
+      if (state.activeIdentity && state.client) {
         showScreen("browse");
         routeSettings();
-      } else renderProfilePicker();
-      return;
-    }
-    if (state.screen === "welcome") {
-      if (state.setupReturnScreen === "browse" && state.activeProfile && state.client) {
-        showScreen("browse");
-        routeSettings();
-      } else renderProfilePicker(null, state.setupProfileId);
-      return;
-    }
-    if (state.screen === "plex-home") {
-      showProviderSetup(state.setupProfileId, null, state.setupReturnScreen);
-      showScreen("welcome");
+      } else renderIdentityPicker();
       return;
     }
     if (state.screen === "server") {
-      renderPlexHomeUsers(state.setupHomeUser && state.setupHomeUser.uuid);
+      cancelPlexServer();
       return;
     }
     if (state.screen === "plex-link" || state.screen === "jellyfin-login") {
       clearInterval(state.pinTimer);
-      showProviderSetup(state.setupProfileId, null, state.setupReturnScreen);
-      showScreen("welcome");
+      if (state.setupReturnScreen === "provider-manage") renderProviderManagement();
+      else renderIdentityPicker();
       return;
     }
     if (state.screen === "browse" && state.route !== "home") {
       routeHome();
       return;
     }
-    if (state.screen === "profile-picker") {
+    if (state.screen === "identity-picker") {
       exitApplication();
       return;
     }
@@ -1833,32 +1680,29 @@
       var libraryIndex = target.getAttribute("data-library");
       var serverIndex = target.getAttribute("data-server");
       var serverSwitchIndex = target.getAttribute("data-server-switch");
-      var profileId = target.getAttribute("data-profile-id");
-      var plexAccountId = target.getAttribute("data-plex-account-id");
-      var homeUserIndex = target.getAttribute("data-home-user");
-      var renameProfileId = target.getAttribute("data-profile-rename");
-      var deleteProfileId = target.getAttribute("data-profile-delete");
+      var identityId = target.getAttribute("data-identity-id");
+      var unlinkPlexAccountId = target.getAttribute("data-plex-unlink");
+      var removeJellyfinIdentityId = target.getAttribute("data-jellyfin-remove");
       var connectionId = target.getAttribute("data-connection-switch");
-      var removeConnectionId = target.getAttribute("data-connection-remove");
       var action = target.getAttribute("data-action");
       if (route) navigate(route);
       if (itemId !== null) activateItem(state.items[itemId], target.getAttribute("data-direct-play") === "true");
       if (libraryIndex !== null) openLibrary(Number(libraryIndex));
       if (serverIndex !== null) choosePlexServer(Number(serverIndex));
       if (serverSwitchIndex !== null) switchPlexServer(Number(serverSwitchIndex));
-      if (profileId !== null) selectProfile(profileId);
-      if (plexAccountId !== null) useLinkedPlexAccount(plexAccountId);
-      if (homeUserIndex !== null) choosePlexHomeUser(Number(homeUserIndex));
-      if (renameProfileId !== null) showProfileEditor(state.profileStore.getProfile(renameProfileId));
-      if (deleteProfileId !== null) deleteProfile(deleteProfileId);
+      if (identityId !== null) selectIdentity(identityId);
+      if (unlinkPlexAccountId !== null) unlinkPlexAccount(unlinkPlexAccountId);
+      if (removeJellyfinIdentityId !== null) removeJellyfinIdentity(removeJellyfinIdentityId);
       if (connectionId !== null) switchConnection(connectionId);
-      if (removeConnectionId !== null) removeConnection(removeConnectionId);
       if (action === "back") goBack();
-      if (action === "new-profile") showProfileEditor(null);
-      if (action === "manage-profiles") renderProfileManagement();
-      if (action === "switch-profile") openProfilePicker();
+      if (action === "manage-providers") renderProviderManagement();
+      if (action === "switch-identity") openIdentityPicker();
+      if (action === "connect-plex") beginPlexLink();
+      if (action === "connect-jellyfin") {
+        state.setupReturnScreen = state.screen === "provider-manage" ? "provider-manage" : "identity-picker";
+        showScreen("jellyfin-login");
+      }
       if (action === "toggle-nick-mode") toggleNickMode();
-      if (action === "add-connection" && state.activeProfile) showProviderSetup(state.activeProfile.id, null, "browse");
       if (action === "cancel-pin") cancelPlexPin();
       if (action === "cancel-confirm") cancelConfirmation();
       if (action === "confirm") confirmAction();
@@ -1874,11 +1718,8 @@
         }
       }
     });
-    byId("plex-connect").addEventListener("click", beginPlexLink);
-    byId("plex-link-retry").addEventListener("click", beginPlexLink);
-    byId("jellyfin-connect").addEventListener("click", function () { showScreen("jellyfin-login"); });
+    byId("plex-link-retry").addEventListener("click", function () { beginPlexLink(true); });
     byId("jellyfin-form").addEventListener("submit", jellyfinLogin);
-    byId("profile-name-form").addEventListener("submit", submitProfileName);
     byId("plex-pin-form").addEventListener("submit", submitPlexPin);
     byId("content-body").addEventListener("submit", function (event) {
       if (event.target && event.target.id === "search-form") {
@@ -1898,8 +1739,8 @@
 
   function init() {
     if (!Navigation) throw new Error("Plezy TV navigation module did not load.");
-    if (!Profiles || !Profiles.ProfileStore) throw new Error("Plezy TV profile store did not load.");
-    state.profileStore = new Profiles.ProfileStore();
+    if (!Identities || !Identities.IdentityStore) throw new Error("Plezy TV identity store did not load.");
+    state.identityStore = new Identities.IdentityStore();
     state.navigation = new Navigation.NavigationIndex({ document: document, artworkLookAhead: 6 });
     state.repeatGate = new Navigation.RepeatGate(85);
     state.performanceDiagnostics = performanceDiagnosticsEnabled();
@@ -1909,7 +1750,7 @@
     logRuntimeDimensions();
     updateClock();
     setInterval(updateClock, 30000);
-    restoreProfiles();
+    restoreIdentities();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

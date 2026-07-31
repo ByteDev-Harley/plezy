@@ -21,7 +21,7 @@ test("Plex connection selection prefers local HTTPS, then local HTTP", function 
   assert.equal(selected.uri, "https://plex.direct:32400");
 });
 
-test("Plex server discovery lists owned servers before shared servers and preserves the account token", async function () {
+test("Plex server discovery lists owned servers first and uses only the Home-user token", async function () {
   var originalFetch = global.fetch;
   var authorization = "";
   global.fetch = async function (_, options) {
@@ -46,12 +46,12 @@ test("Plex server discovery lists owned servers before shared servers and preser
     ]), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   try {
-    var client = new Api.PlexClient({ token: "server-token", accountToken: "account-token" });
+    var client = new Api.PlexClient({ token: "server-token", accountToken: "account-token", identityToken: "home-token" });
     var servers = await client.getServers();
     assert.deepEqual(servers.map(function (server) { return server.name; }), ["My Server", "Shared Library"]);
-    assert.equal(authorization, "account-token");
+    assert.equal(authorization, "home-token");
     client.connect(servers[1]);
-    assert.equal(client.toSession().accountToken, "account-token");
+    assert.equal(client.toSession().accountToken, undefined);
     assert.deepEqual(client.toSession().servers.map(function (server) { return server.id; }), ["owned-1", "shared-1"]);
   } finally {
     global.fetch = originalFetch;

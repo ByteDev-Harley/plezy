@@ -172,13 +172,11 @@
       return hasClass(candidate, "card-row") ||
         hasClass(candidate, "library-grid") ||
         hasClass(candidate, "server-grid") ||
-        hasClass(candidate, "profile-grid") ||
-        hasClass(candidate, "home-user-grid") ||
+        hasClass(candidate, "identity-grid") ||
         hasClass(candidate, "choice-list") ||
         hasClass(candidate, "management-list") ||
-        hasClass(candidate, "linked-account-list") ||
         hasClass(candidate, "provider-buttons") ||
-        hasClass(candidate, "profile-picker-actions") ||
+        hasClass(candidate, "identity-picker-actions") ||
         hasClass(candidate, "confirm-actions") ||
         hasClass(candidate, "search-box") ||
         hasClass(candidate, "detail-actions") ||
@@ -202,11 +200,10 @@
     if (hasClass(containerElement, "card-row")) type = "shelf";
     else if (hasClass(containerElement, "library-grid")) { type = "grid"; columns = 6; }
     else if (hasClass(containerElement, "server-grid")) { type = "grid"; columns = 3; }
-    else if (hasClass(containerElement, "profile-grid")) { type = "grid"; columns = 5; }
-    else if (hasClass(containerElement, "home-user-grid")) { type = "grid"; columns = 4; }
+    else if (hasClass(containerElement, "identity-grid")) { type = "grid"; columns = 5; }
     else if (containerElement.id === "nav-list") type = "sidebar";
-    else if (hasClass(containerElement, "choice-list") || hasClass(containerElement, "management-list") || hasClass(containerElement, "linked-account-list")) type = "vertical";
-    else if (hasClass(containerElement, "provider-buttons") || hasClass(containerElement, "profile-picker-actions") || hasClass(containerElement, "confirm-actions") || hasClass(containerElement, "search-box") || hasClass(containerElement, "detail-actions")) type = "horizontal";
+    else if (hasClass(containerElement, "choice-list") || hasClass(containerElement, "management-list")) type = "vertical";
+    else if (hasClass(containerElement, "provider-buttons") || hasClass(containerElement, "identity-picker-actions") || hasClass(containerElement, "confirm-actions") || hasClass(containerElement, "search-box") || hasClass(containerElement, "detail-actions")) type = "horizontal";
     else if (hasClass(containerElement, "dialog-card")) type = "dialog";
 
     var created = {
@@ -230,9 +227,7 @@
         return hasClass(candidate, "content-body") ||
           hasClass(candidate, "detail-screen") ||
           hasClass(candidate, "choice-list") ||
-          hasClass(candidate, "profile-grid") ||
-          hasClass(candidate, "home-user-grid") ||
-          hasClass(candidate, "linked-account-list") ||
+          hasClass(candidate, "identity-grid") ||
           hasClass(candidate, "management-card");
       }, root.parentElement);
     }

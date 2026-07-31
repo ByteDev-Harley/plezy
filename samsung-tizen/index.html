@@ -23,64 +23,21 @@
       <p id="loading-message">Starting Plezy TV…</p>
     </section>
 
-    <section id="profile-picker-screen" class="screen screen--center hidden">
-      <div class="profile-shell">
-        <img class="profile-logo main-logo" src="icon.png" alt="Plezy"
+    <section id="identity-picker-screen" class="screen screen--center hidden">
+      <div class="identity-shell">
+        <img class="identity-logo main-logo" src="icon.png" alt="Plezy"
              data-standard-alt="Plezy" data-nick-alt="Nick">
-        <p id="profile-picker-eyebrow" class="eyebrow">WHO'S WATCHING?</p>
-        <h1>Choose a profile</h1>
-        <p id="profile-picker-error" class="error-text profile-error hidden"></p>
-        <div id="profile-list" class="profile-grid"></div>
-        <div class="profile-picker-actions">
-          <button class="button" data-action="new-profile" data-focusable="true">＋ New profile</button>
-          <button class="button" data-action="manage-profiles" data-focusable="true">Manage profiles</button>
+        <p id="identity-picker-eyebrow" class="eyebrow">WHO'S WATCHING?</p>
+        <h1>Choose an identity</h1>
+        <p id="identity-picker-error" class="error-text identity-error hidden"></p>
+        <p id="identity-picker-empty" class="identity-empty hidden">Connect Plex or Jellyfin to get started.</p>
+        <div id="identity-list" class="identity-grid"></div>
+        <p id="identity-refresh-status" class="identity-refresh-status"></p>
+        <div class="identity-picker-actions">
+          <button class="button button--plex" data-action="connect-plex" data-focusable="true">Connect Plex</button>
+          <button class="button button--jellyfin" data-action="connect-jellyfin" data-focusable="true">Connect Jellyfin</button>
+          <button class="button" data-action="manage-providers" data-focusable="true">Manage providers</button>
         </div>
-      </div>
-    </section>
-
-    <section id="profile-name-screen" class="screen screen--center hidden">
-      <form id="profile-name-form" class="dialog-card">
-        <button type="button" class="icon-button back-button" data-action="back" data-focusable="true" aria-label="Back">←</button>
-        <p id="profile-name-eyebrow" class="eyebrow">NEW PROFILE</p>
-        <h2 id="profile-name-title">Create a profile</h2>
-        <label>
-          Profile name
-          <input id="profile-name-input" data-focusable="true" maxlength="40" autocomplete="off" required>
-        </label>
-        <p id="profile-name-error" class="error-text hidden"></p>
-        <button id="profile-name-submit" class="button button--primary" data-focusable="true" type="submit">Continue</button>
-      </form>
-    </section>
-
-    <section id="welcome-screen" class="screen screen--center hidden">
-      <div class="welcome-card">
-        <button class="icon-button back-button" data-action="back" data-focusable="true" aria-label="Back">←</button>
-        <img class="welcome-logo main-logo" src="icon.png" alt=""
-             data-standard-alt="" data-nick-alt="">
-        <p id="provider-setup-eyebrow" class="eyebrow">ADD A CONNECTION</p>
-        <h1 id="provider-setup-title">Connect a provider</h1>
-        <p class="lede">Choose the Plex or Jellyfin identity this profile should use.</p>
-        <div id="linked-plex-accounts" class="linked-account-list"></div>
-        <div class="provider-buttons">
-          <button id="plex-connect" class="button button--plex" data-focusable="true">
-            Link another Plex account
-          </button>
-          <button id="jellyfin-connect" class="button button--jellyfin" data-focusable="true">
-            Connect Jellyfin
-          </button>
-        </div>
-        <p class="privacy-note">Credentials and access tokens stay in this TV app's local storage.</p>
-      </div>
-    </section>
-
-    <section id="plex-home-screen" class="screen screen--center hidden">
-      <div class="dialog-card dialog-card--wide">
-        <button class="icon-button back-button" data-action="back" data-focusable="true" aria-label="Back">←</button>
-        <p class="eyebrow">PLEX HOME</p>
-        <h2>Who is watching?</h2>
-        <p class="dialog-copy">Each Plezy profile keeps its selected Plex Home user's recommendations and watch state separate.</p>
-        <div id="plex-home-list" class="home-user-grid"></div>
-        <p id="plex-home-error" class="error-text hidden"></p>
       </div>
     </section>
 
@@ -139,18 +96,23 @@
       <div class="dialog-card dialog-card--wide">
         <button class="icon-button back-button" data-action="back" data-focusable="true" aria-label="Back">←</button>
         <p class="eyebrow">PLEX SERVERS</p>
-        <h2>Choose a server</h2>
+        <h2 id="server-title">Choose a server</h2>
+        <p id="server-copy" class="dialog-copy">Select a Plex Media Server.</p>
         <div id="server-list" class="choice-list"></div>
       </div>
     </section>
 
-    <section id="profile-manage-screen" class="screen screen--center hidden">
+    <section id="provider-manage-screen" class="screen screen--center hidden">
       <div class="dialog-card dialog-card--wide management-card">
         <button class="icon-button back-button" data-action="back" data-focusable="true" aria-label="Back">←</button>
-        <p class="eyebrow">PLEZY PROFILES</p>
-        <h2>Manage profiles</h2>
-        <div id="profile-manage-list" class="management-list"></div>
-        <button class="button" data-action="new-profile" data-focusable="true">＋ New profile</button>
+        <p class="eyebrow">PROVIDER ACCOUNTS</p>
+        <h2>Manage providers</h2>
+        <div id="provider-manage-list" class="management-list"></div>
+        <div class="provider-buttons">
+          <button id="plex-connect-manage" class="button button--plex" data-action="connect-plex" data-focusable="true">Connect Plex</button>
+          <button class="button button--jellyfin" data-action="connect-jellyfin" data-focusable="true">Connect Jellyfin</button>
+        </div>
+        <p class="privacy-note">Credentials and access tokens stay in this TV app's local storage.</p>
       </div>
     </section>
 
@@ -175,7 +137,7 @@
           <button class="nav-item" data-route="libraries" data-focusable="true"><span>▦</span>Libraries</button>
           <button class="nav-item" data-route="search" data-focusable="true"><span>⌕</span>Search</button>
           <button class="nav-item" data-route="settings" data-focusable="true"><span>⚙</span>Settings</button>
-          <button class="nav-item" data-action="switch-profile" data-focusable="true"><span>♙</span>Switch profile</button>
+          <button class="nav-item" data-action="switch-identity" data-focusable="true"><span>♙</span>Switch identity</button>
         </nav>
         <div id="connection-badge" class="connection-badge"></div>
       </aside>
@@ -230,7 +192,7 @@
   <script src="$WEBAPIS/webapis/webapis.js"></script>
   <script src="$B2BAPIS/b2bapis/b2bapis.js"></script>
   <script src="js/navigation.js"></script>
-  <script src="js/profile-store.js"></script>
+  <script src="js/identity-store.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
 </body>

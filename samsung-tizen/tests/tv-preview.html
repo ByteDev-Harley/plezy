@@ -27,22 +27,22 @@
           logo.setAttribute("alt", logo.getAttribute(enabled ? "data-nick-alt" : "data-standard-alt") || "");
         });
         doc.getElementById("loading-message").textContent = enabled ? "Summoning Nick…" : "Starting Plezy TV…";
-        doc.getElementById("profile-picker-eyebrow").textContent = enabled ? "WHO’S NICKING?" : "WHO'S WATCHING?";
-        doc.getElementById("provider-setup-eyebrow").textContent = enabled ? "NICK NEEDS A CONNECTION" : "ADD A CONNECTION";
+        doc.getElementById("identity-picker-eyebrow").textContent = enabled ? "WHO’S NICKING?" : "WHO'S WATCHING?";
       }
 
       applyPreviewBranding(nickMode);
       if (query.indexOf("settings") === -1 &&
           (query.indexOf("picker") !== -1 || !/(?:home|libraries|show|season)/.test(query))) {
-        var picker = doc.getElementById("profile-picker-screen");
+        var picker = doc.getElementById("identity-picker-screen");
         picker.classList.remove("hidden");
-        doc.getElementById("profile-list").innerHTML = [
-          profile("Alex Morgan", "AM", ["plex"], "2 connections"),
-          profile("Kids", "K", ["plex", "jellyfin"], "2 connections"),
-          profile("Sam", "S", ["jellyfin"], "1 connection"),
-          profile("Guest", "G", [], "Set up a provider")
+        doc.getElementById("identity-list").innerHTML = [
+          identity("Alex Morgan", "AM", "plex", "Living Room Server"),
+          identity("Kids", "K", "plex", "PIN protected"),
+          identity("Sam", "S", "jellyfin", "Family Jellyfin"),
+          identity("Guest", "G", "plex", "Choose a server")
         ].join("");
-        picker.querySelector(".profile-card").focus();
+        doc.getElementById("identity-refresh-status").textContent = "Plex Home is up to date.";
+        picker.querySelector(".identity-card").focus();
         return;
       }
 
@@ -93,9 +93,9 @@
           item.classList.toggle("is-active", item.getAttribute("data-route") === "settings");
         });
         doc.getElementById("content-body").innerHTML =
-          '<section class="settings-panel"><p class="eyebrow">ACTIVE PROFILE</p><h2>Alex Morgan</h2>' +
-          '<button class="button" data-focusable="true">Switch profile</button> ' +
-          '<button class="button" data-focusable="true">Manage profiles</button></section>' +
+          '<section class="settings-panel"><p class="eyebrow">ACTIVE IDENTITY</p><h2>Alex Morgan</h2>' +
+          '<button class="button" data-focusable="true">Switch identity</button> ' +
+          '<button class="button" data-focusable="true">Manage providers</button></section>' +
           '<section class="settings-panel"><p class="eyebrow">APPEARANCE</p><div class="nick-mode-setting">' +
           '<div class="nick-mode-copy"><h2>Nick Mode</h2><p id="nick-mode-status" class="status-text">' +
           (nickMode ? 'Maximum Nick achieved.' : 'Plezy branding is active.') +
@@ -103,11 +103,10 @@
           'aria-label="Nick Mode" aria-describedby="nick-mode-status" aria-checked="' + (nickMode ? 'true' : 'false') +
           '" data-focusable="true"><span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>' +
           '<span class="switch-label">' + (nickMode ? 'On' : 'Off') + '</span></button></div></section>' +
-          '<section class="settings-panel"><p class="eyebrow">CONNECTIONS</p><h2>Servers and providers</h2>' +
+          '<section class="settings-panel"><p class="eyebrow">CONNECTION</p><h2>Saved servers</h2>' +
           '<div class="connection-row is-current"><div class="connection-copy"><strong>Living Room Server</strong>' +
-          '<small>Plex · Alex · Connected</small></div><button class="small-button" data-focusable="true" disabled>Use</button>' +
-          '<button class="small-button small-button--danger" data-focusable="true">Remove</button></div>' +
-          '<button class="button button--primary" data-focusable="true">＋ Add connection</button></section>';
+          '<small>Plex · Connected</small></div><button class="small-button" data-focusable="true" disabled>Use</button></div>' +
+          '<button class="button button--primary" data-focusable="true">Choose Plex server</button></section>';
         var nickSwitch = doc.getElementById("nick-mode-switch");
         nickSwitch.addEventListener("click", function () {
           nickMode = this.getAttribute("aria-checked") !== "true";
@@ -145,12 +144,11 @@
           '<span class="media-subtitle">' + subtitle + '</span></div></button>';
       }
 
-      function profile(name, initials, providers, subtitle) {
-        return '<button class="profile-card" data-focusable="true"><span class="profile-avatar">' + initials +
-          '</span><strong>' + name + '</strong><span class="profile-provider-badges">' +
-          providers.map(function (providerName) {
-            return '<span class="provider-badge provider-badge--' + providerName + '">' + providerName + '</span>';
-          }).join("") + '</span><small>' + subtitle + '</small></button>';
+      function identity(name, initials, providerName, subtitle) {
+        return '<button class="identity-card" data-focusable="true"><span class="identity-avatar">' + initials +
+          '</span><strong>' + name + '</strong><span class="identity-provider-badge">' +
+          '<span class="provider-badge provider-badge--' + providerName + '">' + providerName +
+          '</span></span><small>' + subtitle + '</small></button>';
       }
 
       var posters = [

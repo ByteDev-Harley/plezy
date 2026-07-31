@@ -27,8 +27,8 @@ New-Item -ItemType Directory -Force -Path $stageProject, $dist | Out-Null
 
 Push-Location $project
 try {
-  & node --check js/profile-store.js
-  if ($LASTEXITCODE -ne 0) { throw "profile-store.js syntax validation failed." }
+  & node --check js/identity-store.js
+  if ($LASTEXITCODE -ne 0) { throw "identity-store.js syntax validation failed." }
   & node --check js/api.js
   if ($LASTEXITCODE -ne 0) { throw "api.js syntax validation failed." }
   & node --check js/navigation.js

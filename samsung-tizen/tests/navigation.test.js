@@ -219,24 +219,24 @@ test("six-column grids navigate by row and preserve right/down boundaries", func
   assert.equal(document.activeElement, navItem);
 });
 
-test("profile picker grids retain row position and reach the launch actions", function () {
+test("identity picker grids retain row position and reach provider actions", function () {
   var document = new FakeDocument();
-  var root = element(document, null, { id: "profile-picker-screen", rect: rect(0, 0, 1200, 800) });
-  var grid = element(document, root, { classes: ["profile-grid"], rect: rect(100, 120, 1000, 480) });
+  var root = element(document, null, { id: "identity-picker-screen", rect: rect(0, 0, 1200, 800) });
+  var grid = element(document, root, { classes: ["identity-grid"], rect: rect(100, 120, 1000, 480) });
   var cards = [];
-  for (var profileIndex = 0; profileIndex < 7; profileIndex += 1) {
+  for (var identityIndex = 0; identityIndex < 7; identityIndex += 1) {
     cards.push(focusable(
       document,
       grid,
-      120 + (profileIndex % 5) * 190,
-      140 + Math.floor(profileIndex / 5) * 220,
-      { "data-profile-id": String(profileIndex) },
-      ["profile-card"]
+      120 + (identityIndex % 5) * 190,
+      140 + Math.floor(identityIndex / 5) * 220,
+      { "data-identity-id": String(identityIndex) },
+      ["identity-card"]
     ));
   }
-  var actions = element(document, root, { classes: ["profile-picker-actions"], rect: rect(340, 650, 520, 90) });
-  var create = focusable(document, actions, 350, 660, { "data-action": "new-profile" }, ["button"]);
-  var manage = focusable(document, actions, 600, 660, { "data-action": "manage-profiles" }, ["button"]);
+  var actions = element(document, root, { classes: ["identity-picker-actions"], rect: rect(240, 650, 720, 90) });
+  var connect = focusable(document, actions, 260, 660, { "data-action": "connect-plex" }, ["button"]);
+  var manage = focusable(document, actions, 680, 660, { "data-action": "manage-providers" }, ["button"]);
   var index = new Navigation.NavigationIndex({ document: document });
   index.refresh(root);
 
@@ -244,7 +244,7 @@ test("profile picker grids retain row position and reach the launch actions", fu
   assert.equal(index.move("down"), true);
   assert.equal(document.activeElement, cards[5]);
   assert.equal(index.move("down"), true);
-  assert.equal(document.activeElement, create);
+  assert.equal(document.activeElement, connect);
   assert.equal(index.move("right"), true);
   assert.equal(document.activeElement, manage);
   assert.equal(index.move("up"), true);
