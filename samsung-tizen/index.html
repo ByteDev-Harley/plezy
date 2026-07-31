@@ -17,15 +17,17 @@
 <body>
   <div id="app" class="app" role="application" aria-label="Plezy TV">
     <section id="loading-screen" class="screen screen--center">
-      <img class="splash-logo" src="icon.png" alt="">
+      <img class="splash-logo main-logo" src="icon.png" alt=""
+           data-standard-alt="" data-nick-alt="">
       <div class="spinner" aria-label="Loading"></div>
       <p id="loading-message">Starting Plezy TV…</p>
     </section>
 
     <section id="profile-picker-screen" class="screen screen--center hidden">
       <div class="profile-shell">
-        <img class="profile-logo" src="icon.png" alt="Plezy">
-        <p class="eyebrow">WHO'S WATCHING?</p>
+        <img class="profile-logo main-logo" src="icon.png" alt="Plezy"
+             data-standard-alt="Plezy" data-nick-alt="Nick">
+        <p id="profile-picker-eyebrow" class="eyebrow">WHO'S WATCHING?</p>
         <h1>Choose a profile</h1>
         <p id="profile-picker-error" class="error-text profile-error hidden"></p>
         <div id="profile-list" class="profile-grid"></div>
@@ -53,8 +55,9 @@
     <section id="welcome-screen" class="screen screen--center hidden">
       <div class="welcome-card">
         <button class="icon-button back-button" data-action="back" data-focusable="true" aria-label="Back">←</button>
-        <img class="welcome-logo" src="icon.png" alt="">
-        <p class="eyebrow">ADD A CONNECTION</p>
+        <img class="welcome-logo main-logo" src="icon.png" alt=""
+             data-standard-alt="" data-nick-alt="">
+        <p id="provider-setup-eyebrow" class="eyebrow">ADD A CONNECTION</p>
         <h1 id="provider-setup-title">Connect a provider</h1>
         <p class="lede">Choose the Plex or Jellyfin identity this profile should use.</p>
         <div id="linked-plex-accounts" class="linked-account-list"></div>
@@ -165,7 +168,8 @@
 
     <section id="browse-screen" class="screen hidden">
       <aside class="sidebar">
-        <img class="sidebar-logo" src="icon.png" alt="Plezy">
+        <img class="sidebar-logo main-logo" src="icon.png" alt="Plezy"
+             data-standard-alt="Plezy" data-nick-alt="Nick">
         <nav id="nav-list">
           <button class="nav-item is-active" data-route="home" data-focusable="true"><span>⌂</span>Home</button>
           <button class="nav-item" data-route="libraries" data-focusable="true"><span>▦</span>Libraries</button>

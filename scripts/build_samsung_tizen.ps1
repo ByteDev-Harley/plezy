@@ -46,6 +46,7 @@ try {
 Copy-Item -LiteralPath (Join-Path $project "config.xml") -Destination $stageProject
 Copy-Item -LiteralPath (Join-Path $project "index.html") -Destination $stageProject
 Copy-Item -LiteralPath (Join-Path $project "icon.png") -Destination $stageProject
+Copy-Item -LiteralPath (Join-Path $project "nick-mode.png") -Destination $stageProject
 Copy-Item -LiteralPath (Join-Path $project "css") -Destination $stageProject -Recurse
 Copy-Item -LiteralPath (Join-Path $project "js") -Destination $stageProject -Recurse
 Copy-Item -LiteralPath (Join-Path $project "tests") -Destination $stageProject -Recurse

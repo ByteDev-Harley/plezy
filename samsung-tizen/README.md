@@ -12,9 +12,11 @@ The navigation runtime builds its focus graph after each render, keeps geometry 
 
 The Samsung client has its own local Plezy profile layer. The profile picker is shown on every launch. A profile can hold multiple Plex or Jellyfin connections but opens one server at a time, keeping provider feeds, recommendations, progress, and watch-state calls isolated. Linked Plex accounts can be reused while each profile binding stores its selected Plex Home identity token; Jellyfin credentials remain independent. Profiles are convenience identities on the TV and are not a parental-security boundary.
 
+Each profile can independently enable Nick Mode from Settings. The preference changes only in-app branding, copy, and theme colors; the Samsung launcher icon and provider-specific colors remain unchanged.
+
 Profile state is stored in `plezy-tv-profiles-v2`. On first launch after an upgrade, a valid `plezy-tv-session-v1` session is migrated to a `Default` profile; the old value is removed only after the new document is successfully read back. Provider access tokens still remain only in Tizen local storage.
 
-Runtime files are `config.xml`, `index.html`, `icon.png`, `css/app.css`, `js/profile-store.js`, `js/api.js`, `js/navigation.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
+Runtime files are `config.xml`, `index.html`, `icon.png`, `nick-mode.png`, `css/app.css`, `js/profile-store.js`, `js/api.js`, `js/navigation.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
 
 ## Local checks
 
@@ -25,7 +27,7 @@ npm test
 
 No npm dependencies are installed or shipped. The test suite uses Node's built-in test runner.
 
-Open `tests/tv-preview.html` at a 1920×1080 viewport to preview the launch picker. Add `?home`, `?libraries`, `?show`, or `?season` to preview the maintained content layouts.
+Open `tests/tv-preview.html` at a 1920×1080 viewport to preview the launch picker. Add `?home`, `?libraries`, `?show`, or `?season` to preview the maintained content layouts. Use `?nick` for the Nick Mode picker or `?settings&nick` for the enabled Settings switch; the latter can be clicked to compare both modes while retaining focus. Emulate `prefers-reduced-motion: reduce` in browser developer tools to verify the logo animation is disabled.
 
 ## Navigation performance diagnostics
 

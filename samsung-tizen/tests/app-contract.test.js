@@ -12,6 +12,9 @@ var css = fs.readFileSync(path.join(root, "css", "app.css"), "utf8");
 var index = fs.readFileSync(path.join(root, "index.html"), "utf8");
 var profiles = fs.readFileSync(path.join(root, "js", "profile-store.js"), "utf8");
 var preview = fs.readFileSync(path.join(root, "tests", "tv-preview.html"), "utf8");
+var projectYaml = fs.readFileSync(path.join(root, "tizen_web_project.yaml"), "utf8");
+var validator = fs.readFileSync(path.join(root, "tools", "validate-package.js"), "utf8");
+var buildScript = fs.readFileSync(path.join(root, "..", "scripts", "build_samsung_tizen.ps1"), "utf8");
 
 test("resumed transcodes retain their absolute timeline position", function () {
   assert.match(app, /timelineOffsetMs \+ \(Number\(time\) \|\| 0\)/);
@@ -162,6 +165,66 @@ test("Settings exposes profile, connection switch, add, and remove management", 
   assert.match(settings, /data-connection-switch/);
   assert.match(settings, /data-connection-remove/);
   assert.match(settings, /data-action="add-connection"/);
+});
+
+test("Settings exposes a D-pad switch and Nick Mode toggles synchronously restore its focus", function () {
+  var settings = app.slice(app.indexOf("function routeSettings"), app.indexOf("function navigate"));
+  var toggle = app.slice(app.indexOf("function toggleNickMode"), app.indexOf("function navigate"));
+  assert.match(settings, /role="switch"/);
+  assert.match(settings, /aria-checked="' \+\s*\(nickModeEnabled \? "true" : "false"\)/);
+  assert.match(settings, /data-action="toggle-nick-mode" data-focusable="true"/);
+  assert.match(settings, /Maximum Nick achieved\./);
+  assert.match(settings, /attributes: \{ "data-action": "toggle-nick-mode" \}/);
+  assert.match(toggle, /profileStore\.setNickMode\(state\.activeProfile\.id, enabled\)/);
+  assert.match(toggle, /applyProfileBranding\(state\.activeProfile\)/);
+  assert.match(toggle, /routeSettings\(true\)/);
+  assert.match(toggle, /Nick Mode engaged\./);
+  assert.match(toggle, /Nick Mode disengaged\./);
+});
+
+test("all four main-logo surfaces share immediate profile branding and limited copy", function () {
+  var branding = app.slice(app.indexOf("function applyProfileBranding"), app.indexOf("function persistedLastUsedProfile"));
+  assert.equal((index.match(/\bmain-logo\b/g) || []).length, 4);
+  ["splash-logo", "profile-logo", "welcome-logo", "sidebar-logo"].forEach(function (surface) {
+    assert.match(index, new RegExp('class="[^"]*' + surface + '[^"]*main-logo'));
+  });
+  assert.match(branding, /all\("\.main-logo"\)/);
+  assert.match(branding, /NICK_MODE_LOGO_SOURCE : STANDARD_LOGO_SOURCE/);
+  assert.match(branding, /classList\.toggle\("nick-mode", enabled\)/);
+  assert.match(branding, /Summoning Nick…/);
+  assert.match(branding, /WHO’S NICKING\?/);
+  assert.match(branding, /NICK NEEDS A CONNECTION/);
+});
+
+test("profile selection and failure-safe picker branding use the persisted last-used profile", function () {
+  var picker = app.slice(app.indexOf("function renderProfilePicker"), app.indexOf("function openProfilePicker"));
+  var select = app.slice(app.indexOf("function selectProfile"), app.indexOf("function switchConnection"));
+  var restore = app.slice(app.indexOf("function restoreProfiles"), app.indexOf("function formatTime"));
+  assert.match(app, /state\.profileStore\.document\.lastProfileId/);
+  assert.match(picker, /applyLastUsedProfileBranding\(\)/);
+  assert.ok(select.indexOf("applyProfileBranding(profile)") < select.indexOf("chooseDefaultConnection(profileId)"));
+  assert.match(restore, /profileDocument\.lastProfileId/);
+  assert.match(restore, /applyProfileBranding\(lastUsedProfile\)/);
+  assert.match(app, /renderProfilePicker\(result\.error\.cancelled/);
+});
+
+test("Nick Mode theme changes general colors, preserves providers, and honors reduced motion", function () {
+  assert.match(css, /#app\.nick-mode\s*\{[^}]*--accent: #d9959a;[^}]*--focus: #ffd0d4;/s);
+  assert.match(css, /animation: nick-logo-wobble 6s/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(css, /#app\.nick-mode \.main-logo\s*\{\s*animation: none;/);
+  assert.match(css, /\.button--plex\s*\{[^}]*background: var\(--plex\)/s);
+  assert.match(css, /\.button--jellyfin\s*\{[^}]*background: var\(--jellyfin\)/s);
+  assert.match(css, /\.link-code\s*\{[^}]*color: var\(--plex\)/s);
+});
+
+test("the Nick image is validated, declared in the Tizen project, and staged without replacing the launcher icon", function () {
+  assert.equal(fs.existsSync(path.join(root, "nick-mode.png")), true);
+  assert.match(projectYaml, /^\s+- nick-mode\.png$/m);
+  assert.match(validator, /Missing Nick Mode branding asset/);
+  assert.match(buildScript, /Join-Path \$project "nick-mode\.png"/);
+  assert.match(buildScript, /Join-Path \$project "icon\.png"/);
+  assert.match(index, /NICK_MODE_LOGO_SOURCE|nick-mode\.png|main-logo/);
 });
 
 test("the maintained package loads the profile store before app startup", function () {

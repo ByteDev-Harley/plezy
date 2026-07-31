@@ -98,6 +98,40 @@ test("profiles, accounts, bindings, and defaults persist across a round trip", f
   assert.notEqual(one.id, two.id);
 });
 
+test("missing and malformed Nick Mode values normalize to false", function () {
+  var document = Profiles.normalizeDocument({
+    version: 2,
+    profiles: [
+      { id: "missing", name: "Missing" },
+      { id: "string", name: "String", nickMode: "true" },
+      { id: "number", name: "Number", nickMode: 1 },
+      { id: "enabled", name: "Enabled", nickMode: true }
+    ]
+  });
+  assert.deepEqual(document.profiles.map(function (profile) { return profile.nickMode; }), [false, false, false, true]);
+});
+
+test("Nick Mode persists per profile and setNickMode validates its target", function () {
+  var storage = new MemoryStorage();
+  var first = storeFor(storage);
+  first.load();
+  var one = first.createProfile("One");
+  var two = first.createProfile("Two");
+  assert.equal(one.nickMode, false);
+  assert.equal(two.nickMode, false);
+
+  var enabled = first.setNickMode(one.id, true);
+  assert.equal(enabled.nickMode, true);
+  assert.equal(first.getProfile(two.id).nickMode, false);
+
+  var second = storeFor(storage);
+  second.load();
+  assert.equal(second.getProfile(one.id).nickMode, true);
+  assert.equal(second.getProfile(two.id).nickMode, false);
+  assert.equal(second.setNickMode(one.id, false).nickMode, false);
+  assert.throws(function () { second.setNickMode("missing", true); }, /Profile was not found/);
+});
+
 test("malformed JSON and malformed rows are ignored without destructive load writes", function () {
   var malformed = "{this is recoverable source data";
   var brokenStorage = new MemoryStorage({ "plezy-tv-profiles-v2": malformed });

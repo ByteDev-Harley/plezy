@@ -18,7 +18,22 @@
       Array.prototype.forEach.call(screens, function (screen) { screen.classList.add("hidden"); });
 
       var query = location.search;
-      if (query.indexOf("picker") !== -1 || !/(?:home|libraries|show|season)/.test(query)) {
+      var nickMode = query.indexOf("nick") !== -1;
+
+      function applyPreviewBranding(enabled) {
+        doc.getElementById("app").classList.toggle("nick-mode", enabled);
+        Array.prototype.forEach.call(doc.querySelectorAll(".main-logo"), function (logo) {
+          logo.setAttribute("src", enabled ? "nick-mode.png" : "icon.png");
+          logo.setAttribute("alt", logo.getAttribute(enabled ? "data-nick-alt" : "data-standard-alt") || "");
+        });
+        doc.getElementById("loading-message").textContent = enabled ? "Summoning Nick…" : "Starting Plezy TV…";
+        doc.getElementById("profile-picker-eyebrow").textContent = enabled ? "WHO’S NICKING?" : "WHO'S WATCHING?";
+        doc.getElementById("provider-setup-eyebrow").textContent = enabled ? "NICK NEEDS A CONNECTION" : "ADD A CONNECTION";
+      }
+
+      applyPreviewBranding(nickMode);
+      if (query.indexOf("settings") === -1 &&
+          (query.indexOf("picker") !== -1 || !/(?:home|libraries|show|season)/.test(query))) {
         var picker = doc.getElementById("profile-picker-screen");
         picker.classList.remove("hidden");
         doc.getElementById("profile-list").innerHTML = [
@@ -70,6 +85,41 @@
       doc.getElementById("page-eyebrow").textContent = "Living Room Server";
       doc.getElementById("page-title").textContent = "Home";
       doc.getElementById("clock").textContent = "8:42 PM";
+
+      if (query.indexOf("settings") !== -1) {
+        doc.getElementById("page-title").textContent = "Settings";
+        doc.getElementById("page-eyebrow").textContent = "Alex Morgan";
+        Array.prototype.forEach.call(doc.querySelectorAll(".nav-item"), function (item) {
+          item.classList.toggle("is-active", item.getAttribute("data-route") === "settings");
+        });
+        doc.getElementById("content-body").innerHTML =
+          '<section class="settings-panel"><p class="eyebrow">ACTIVE PROFILE</p><h2>Alex Morgan</h2>' +
+          '<button class="button" data-focusable="true">Switch profile</button> ' +
+          '<button class="button" data-focusable="true">Manage profiles</button></section>' +
+          '<section class="settings-panel"><p class="eyebrow">APPEARANCE</p><div class="nick-mode-setting">' +
+          '<div class="nick-mode-copy"><h2>Nick Mode</h2><p id="nick-mode-status" class="status-text">' +
+          (nickMode ? 'Maximum Nick achieved.' : 'Plezy branding is active.') +
+          '</p></div><button id="nick-mode-switch" class="nick-mode-switch" type="button" role="switch" ' +
+          'aria-label="Nick Mode" aria-describedby="nick-mode-status" aria-checked="' + (nickMode ? 'true' : 'false') +
+          '" data-focusable="true"><span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>' +
+          '<span class="switch-label">' + (nickMode ? 'On' : 'Off') + '</span></button></div></section>' +
+          '<section class="settings-panel"><p class="eyebrow">CONNECTIONS</p><h2>Servers and providers</h2>' +
+          '<div class="connection-row is-current"><div class="connection-copy"><strong>Living Room Server</strong>' +
+          '<small>Plex · Alex · Connected</small></div><button class="small-button" data-focusable="true" disabled>Use</button>' +
+          '<button class="small-button small-button--danger" data-focusable="true">Remove</button></div>' +
+          '<button class="button button--primary" data-focusable="true">＋ Add connection</button></section>';
+        var nickSwitch = doc.getElementById("nick-mode-switch");
+        nickSwitch.addEventListener("click", function () {
+          nickMode = this.getAttribute("aria-checked") !== "true";
+          applyPreviewBranding(nickMode);
+          this.setAttribute("aria-checked", nickMode ? "true" : "false");
+          this.querySelector(".switch-label").textContent = nickMode ? "On" : "Off";
+          doc.getElementById("nick-mode-status").textContent = nickMode ? "Maximum Nick achieved." : "Plezy branding is active.";
+          this.focus();
+        });
+        nickSwitch.focus();
+        return;
+      }
 
       if (location.search.indexOf("libraries") !== -1) {
         doc.getElementById("page-title").textContent = "Libraries";

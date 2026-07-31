@@ -4,6 +4,8 @@
   var Api = window.PlezyTVApi;
   var Navigation = window.PlezyTVNavigation;
   var Profiles = window.PlezyTVProfiles;
+  var STANDARD_LOGO_SOURCE = "icon.png";
+  var NICK_MODE_LOGO_SOURCE = "nick-mode.png";
   var requestFrame = window.requestAnimationFrame
     ? function (callback) { return window.requestAnimationFrame(callback); }
     : function (callback) { return setTimeout(function () { callback(Date.now()); }, 16); };
@@ -83,6 +85,31 @@
   function setText(id, value) {
     var element = byId(id);
     if (element) element.textContent = value === undefined || value === null ? "" : String(value);
+  }
+
+  function applyProfileBranding(profile) {
+    var enabled = Boolean(profile && profile.nickMode === true);
+    var appRoot = byId("app");
+    if (appRoot) appRoot.classList.toggle("nick-mode", enabled);
+    all(".main-logo").forEach(function (logo) {
+      logo.setAttribute("src", enabled ? NICK_MODE_LOGO_SOURCE : STANDARD_LOGO_SOURCE);
+      var alternateText = logo.getAttribute(enabled ? "data-nick-alt" : "data-standard-alt");
+      if (alternateText !== null) logo.setAttribute("alt", alternateText);
+    });
+    setText("loading-message", enabled ? "Summoning Nick…" : "Starting Plezy TV…");
+    setText("profile-picker-eyebrow", enabled ? "WHO’S NICKING?" : "WHO'S WATCHING?");
+    setText("provider-setup-eyebrow", enabled ? "NICK NEEDS A CONNECTION" : "ADD A CONNECTION");
+  }
+
+  function persistedLastUsedProfile() {
+    var profileId = state.profileStore && state.profileStore.document
+      ? state.profileStore.document.lastProfileId
+      : "";
+    return profileId ? state.profileStore.getProfile(profileId) : null;
+  }
+
+  function applyLastUsedProfileBranding() {
+    applyProfileBranding(persistedLastUsedProfile());
   }
 
   function show(element) { if (element) element.classList.remove("hidden"); }
@@ -197,6 +224,7 @@
   }
 
   function renderProfilePicker(error, focusProfileId) {
+    applyLastUsedProfileBranding();
     var profiles = state.profileStore.getProfiles();
     if (!profiles.length) {
       showProfileEditor(null);
@@ -271,6 +299,7 @@
       renderProfilePicker(new Error("That profile is no longer available."));
       return;
     }
+    applyProfileBranding(profile);
     state.setupProfileId = profileId;
     state.setupAccount = null;
     state.setupClient = null;
@@ -295,6 +324,7 @@
   }
 
   function renderProfileManagement(focusProfileId) {
+    if (!state.activeProfile) applyLastUsedProfileBranding();
     var profiles = state.profileStore.getProfiles();
     if (!profiles.length) {
       showProfileEditor(null);
@@ -351,8 +381,10 @@
       "This removes this profile's connections and Jellyfin credentials. A linked Plex account stays available only while another profile uses it.",
       "Delete profile",
       function () {
-        if (state.activeProfile && state.activeProfile.id === profileId) leaveActiveContext();
+        var deletedActiveProfile = Boolean(state.activeProfile && state.activeProfile.id === profileId);
+        if (deletedActiveProfile) leaveActiveContext();
         state.profileStore.deleteProfile(profileId);
+        if (deletedActiveProfile) applyLastUsedProfileBranding();
         if (state.profileStore.getProfiles().length) renderProfileManagement();
         else showProfileEditor(null);
       },
@@ -688,10 +720,11 @@
     });
   }
 
-  function routeSettings() {
+  function routeSettings(focusNickModeSwitch) {
     setActiveRoute("settings");
     state.contentRevision += 1;
     setPage("Settings", state.activeProfile ? state.activeProfile.name : providerName());
+    var nickModeEnabled = Boolean(state.activeProfile && state.activeProfile.nickMode === true);
     var bindings = state.activeProfile ? state.profileStore.getBindings(state.activeProfile.id) : [];
     var connectionRows = bindings.map(function (binding) {
       var current = state.activeBinding && binding.id === state.activeBinding.id;
@@ -712,12 +745,42 @@
       escapeHtml(state.activeProfile ? state.activeProfile.name : "Profile") + '</h2><button class="button" ' +
       'data-action="switch-profile" data-focusable="true">Switch profile</button> ' +
       '<button class="button" data-action="manage-profiles" data-focusable="true">Manage profiles</button></section>' +
+      '<section class="settings-panel"><p class="eyebrow">APPEARANCE</p><div class="nick-mode-setting">' +
+      '<div class="nick-mode-copy"><h2>Nick Mode</h2><p id="nick-mode-status" class="status-text">' +
+      escapeHtml(nickModeEnabled ? "Maximum Nick achieved." : "Plezy branding is active.") +
+      '</p></div><button id="nick-mode-switch" class="nick-mode-switch" type="button" role="switch" ' +
+      'aria-label="Nick Mode" aria-describedby="nick-mode-status" aria-checked="' +
+      (nickModeEnabled ? "true" : "false") + '" data-action="toggle-nick-mode" data-focusable="true">' +
+      '<span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>' +
+      '<span class="switch-label">' + (nickModeEnabled ? "On" : "Off") + '</span></button></div></section>' +
       '<section class="settings-panel"><p class="eyebrow">CONNECTIONS</p><h2>Servers and providers</h2>' +
       connectionRows + '<button class="button button--primary" data-action="add-connection" ' +
       'data-focusable="true">＋ Add connection</button>' +
       '<p class="privacy-note">Provider credentials remain in this TV app\'s local storage and are removed when no profile references them.</p></section>'
     );
-    focusFirst(byId("content-body"));
+    if (focusNickModeSwitch) {
+      scheduleNavigationRefresh({
+        scope: byId("content-body"),
+        attributes: { "data-action": "toggle-nick-mode" },
+        preferAutofocus: false
+      });
+    } else {
+      focusFirst(byId("content-body"));
+    }
+  }
+
+  function toggleNickMode() {
+    if (!state.activeProfile) return;
+    var enabled = state.activeProfile.nickMode !== true;
+    try {
+      state.activeProfile = state.profileStore.setNickMode(state.activeProfile.id, enabled);
+      applyProfileBranding(state.activeProfile);
+      routeSettings(true);
+      toast(enabled ? "Nick Mode engaged." : "Nick Mode disengaged.");
+    } catch (error) {
+      toast(friendlyError(error), 6500);
+      routeSettings(true);
+    }
   }
 
   function navigate(route) {
@@ -1153,6 +1216,7 @@
     state.profileStore.touchConnection(profile.id, binding.id);
     state.activeProfile = state.profileStore.getProfile(profile.id);
     state.activeBinding = state.profileStore.getBinding(binding.id);
+    applyProfileBranding(state.activeProfile);
     state.setupClient = null;
     state.setupAccount = null;
     state.setupHomeUser = null;
@@ -1170,6 +1234,7 @@
       client: state.client
     } : null;
     leaveActiveContext();
+    applyProfileBranding(profile);
     var revision = state.activationRevision;
     setLoading("Opening " + (profile ? profile.name : "profile") + "…");
     Api.activateConnection(profile, binding, account, {
@@ -1182,6 +1247,7 @@
           state.activeProfile = previous.profile;
           state.activeBinding = previous.binding;
           state.pendingServers = previous.client.servers ? previous.client.servers.slice() : [];
+          applyProfileBranding(previous.profile);
           showScreen("browse");
           routeSettings();
           scheduleNavigationRefresh({
@@ -1210,6 +1276,12 @@
   }
 
   function selectProfile(profileId) {
+    var profile = state.profileStore.getProfile(profileId);
+    if (!profile) {
+      renderProfilePicker(new Error("That profile is no longer available."));
+      return;
+    }
+    applyProfileBranding(profile);
     var binding = state.profileStore.chooseDefaultConnection(profileId);
     if (!binding) {
       leaveActiveContext();
@@ -1250,7 +1322,11 @@
   }
 
   function restoreProfiles() {
-    state.profileStore.migrateLegacy();
+    var profileDocument = state.profileStore.migrateLegacy();
+    var lastUsedProfile = profileDocument.lastProfileId
+      ? state.profileStore.getProfile(profileDocument.lastProfileId)
+      : null;
+    applyProfileBranding(lastUsedProfile);
     renderProfilePicker();
   }
 
@@ -1781,6 +1857,7 @@
       if (action === "new-profile") showProfileEditor(null);
       if (action === "manage-profiles") renderProfileManagement();
       if (action === "switch-profile") openProfilePicker();
+      if (action === "toggle-nick-mode") toggleNickMode();
       if (action === "add-connection" && state.activeProfile) showProviderSetup(state.activeProfile.id, null, "browse");
       if (action === "cancel-pin") cancelPlexPin();
       if (action === "cancel-confirm") cancelConfirmation();

@@ -31,6 +31,7 @@ files:
   - css/app.css
   - icon.png
   - index.html
+  - nick-mode.png
   - js/api.js
   - js/app.js
   - js/navigation.js

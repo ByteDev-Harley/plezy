@@ -6,6 +6,8 @@
   --text: #f7f7f8;
   --muted: #a9adb8;
   --accent: #e5a00d;
+  --accent-glow: rgba(229, 160, 13, .14);
+  --accent-soft: rgba(229, 160, 13, .16);
   --jellyfin: #9b5de5;
   --focus: #ffffff;
   --danger: #ff7676;
@@ -55,6 +57,13 @@ body {
   background: var(--bg);
 }
 
+#app.nick-mode {
+  --accent: #d9959a;
+  --accent-glow: rgba(217, 149, 154, .14);
+  --accent-soft: rgba(217, 149, 154, .16);
+  --focus: #ffd0d4;
+}
+
 button,
 input {
   font: inherit;
@@ -72,7 +81,7 @@ button {
 .screen {
   overflow: hidden;
   background:
-    radial-gradient(circle at 82% 8%, rgba(229, 160, 13, .14), transparent 35%),
+    radial-gradient(circle at 82% 8%, var(--accent-glow), transparent 35%),
     radial-gradient(circle at 14% 92%, rgba(103, 58, 183, .11), transparent 32%),
     var(--bg);
 }
@@ -107,6 +116,24 @@ button {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+#app.nick-mode .main-logo {
+  transform-origin: center;
+  animation: nick-logo-wobble 6s ease-in-out infinite;
+}
+
+@keyframes nick-logo-wobble {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-2px) rotate(-1deg); }
+  50% { transform: translateY(1px) rotate(.6deg); }
+  75% { transform: translateY(-1px) rotate(1deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app.nick-mode .main-logo {
+    animation: none;
+  }
 }
 
 .welcome-card,
@@ -186,9 +213,13 @@ h2 {
   transition: background-color .1s linear, transform .12s ease-out, box-shadow .12s ease-out;
 }
 
-.button--plex,
 .button--primary {
   background: var(--accent);
+  color: #111216;
+}
+
+.button--plex {
+  background: var(--plex);
   color: #111216;
 }
 
@@ -224,7 +255,7 @@ h2 {
 
 .link-code {
   margin: 38px auto;
-  color: var(--accent);
+  color: var(--plex);
   font-size: 94px;
   font-weight: 800;
   letter-spacing: .2em;
@@ -486,12 +517,74 @@ h2 {
   font-size: 32px;
 }
 
+.nick-mode-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nick-mode-copy h2 {
+  margin-bottom: 8px;
+}
+
+.nick-mode-copy .status-text {
+  min-height: 0;
+  margin-bottom: 0;
+}
+
+.nick-mode-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 190px;
+  min-height: 68px;
+  padding: 12px 22px;
+  border: 0;
+  border-radius: 13px;
+  background: #363a46;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.switch-track {
+  position: relative;
+  width: 74px;
+  height: 38px;
+  margin-right: 15px;
+  border-radius: 20px;
+  background: #676c79;
+  transition: background-color .12s linear;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .14s ease-out;
+}
+
+.nick-mode-switch[aria-checked="true"] .switch-track {
+  background: var(--accent);
+}
+
+.nick-mode-switch[aria-checked="true"] .switch-thumb {
+  transform: translateX(36px);
+}
+
+.switch-label {
+  min-width: 31px;
+}
+
 .connection-row {
   grid-template-columns: 1fr auto auto;
 }
 
 .connection-row.is-current {
-  background: rgba(229, 160, 13, .16);
+  background: var(--accent-soft);
 }
 
 .icon-button {
@@ -600,7 +693,7 @@ input:focus {
 }
 
 .nav-item.is-active {
-  background: rgba(229, 160, 13, .16);
+  background: var(--accent-soft);
   color: #fff;
 }
 

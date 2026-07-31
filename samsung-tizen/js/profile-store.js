@@ -47,6 +47,7 @@
     return {
       id: id,
       name: name.slice(0, 40),
+      nickMode: row.nickMode === true,
       defaultConnectionId: text(row.defaultConnectionId || row.defaultBindingId),
       createdAt: timestamp(row.createdAt),
       updatedAt: timestamp(row.updatedAt),
@@ -406,6 +407,7 @@
     var profile = {
       id: this._uuid(),
       name: name.slice(0, 40),
+      nickMode: false,
       defaultConnectionId: "",
       createdAt: now,
       updatedAt: now,
@@ -422,6 +424,15 @@
     if (!profile) throw new Error("Profile was not found.");
     if (!name) throw new Error("Profile name is required.");
     profile.name = name.slice(0, 40);
+    profile.updatedAt = this._now();
+    this._persist();
+    return copy(profile);
+  };
+
+  ProfileStore.prototype.setNickMode = function (profileId, enabled) {
+    var profile = this._profile(profileId);
+    if (!profile) throw new Error("Profile was not found.");
+    profile.nickMode = enabled === true;
     profile.updatedAt = this._now();
     this._persist();
     return copy(profile);

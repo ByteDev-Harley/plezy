@@ -24,6 +24,7 @@ var navigation = read("js/navigation.js");
 var app = read("js/app.js");
 var projectYaml = read("tizen_web_project.yaml");
 var packageJson = read("package.json");
+var nickModeAssetPath = path.join(root, "nick-mode.png");
 
 [
   'required_version="6.0"',
@@ -50,6 +51,14 @@ localReferences.forEach(function (reference) {
 });
 
 if (!fs.existsSync(path.join(root, "icon.png"))) failures.push("Missing Samsung application icon: icon.png");
+if (!fs.existsSync(nickModeAssetPath)) {
+  failures.push("Missing Nick Mode branding asset: nick-mode.png");
+} else {
+  var nickModeAsset = fs.readFileSync(nickModeAssetPath);
+  if (nickModeAsset.length < 24 || nickModeAsset.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
+    failures.push("Nick Mode branding asset must be a valid PNG: nick-mode.png");
+  }
+}
 if (/<script(?![^>]*\bsrc=)[^>]*>/i.test(index)) failures.push("Inline scripts violate the package CSP.");
 if (/\son[a-z]+\s*=/i.test(index)) failures.push("Inline event handlers violate the package CSP.");
 if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(api + profiles + navigation + app)) failures.push("Dynamic code execution is not allowed.");
@@ -79,7 +88,9 @@ if (app.indexOf("libraryVisibleCount") === -1 || app.indexOf("limit: 12") === -1
 if (app.indexOf("lastNavigationAt") !== -1 || app.indexOf("event.repeat") === -1 || navigation.indexOf("RepeatGate") === -1) failures.push("Samsung held-key repeat handling is missing.");
 if (app.indexOf("data-artwork-src") === -1 || navigation.indexOf("artworkLookAhead") === -1) failures.push("Samsung artwork look-ahead loading is missing.");
 if (app.indexOf("keydown-to-focus") === -1 || app.indexOf("keydown-to-next-paint") === -1 || app.indexOf("performanceDiagnosticsEnabled") === -1) failures.push("Opt-in Samsung navigation diagnostics are missing.");
+if (app.indexOf('NICK_MODE_LOGO_SOURCE = "nick-mode.png"') === -1 || (index.match(/\bmain-logo\b/g) || []).length !== 4) failures.push("Nick Mode shared-logo branding surfaces are invalid.");
 if (projectYaml.indexOf("profile: tv-samsung") === -1 || projectYaml.indexOf('api_version: "6.0"') === -1) failures.push("VS Code Tizen TV project metadata is invalid.");
+if (projectYaml.indexOf("  - nick-mode.png") === -1) failures.push("The Nick Mode asset must be included in the Tizen project.");
 if (projectYaml.indexOf("  - js/navigation.js") === -1) failures.push("The navigation runtime must be included in the Tizen project.");
 if (projectYaml.indexOf("  - js/profile-store.js") === -1) failures.push("The profile store must be included in the Tizen project.");
 if (projectYaml.indexOf("  - tests/*") === -1 || projectYaml.indexOf("  - tools/*") === -1 || projectYaml.indexOf("  - tizen_web_project.yaml") === -1) failures.push("Development-only files must be excluded from the WGT.");
