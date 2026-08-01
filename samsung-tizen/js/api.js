@@ -6,7 +6,7 @@
   "use strict";
 
   var PRODUCT = "Plezy TV";
-  var VERSION = "2.10.5-samsung.8";
+  var VERSION = "2.10.5-samsung.9";
   var STORAGE_KEY = "plezy-tv-session-v1";
   var DEVICE_KEY = "plezy-tv-device-id";
   var cachedDeviceId = "";
@@ -16,8 +16,12 @@
     "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=1920)",
     "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=1080)",
     "add-limitation(scope=videoAudioCodec&scopeName=aac&type=upperBound&name=audio.channels&value=6)",
-    "add-transcode-target(type=subtitleProfile&context=streaming&protocol=http&container=srt&subtitleCodec=srt)"
+    "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)"
   ].join("+");
+  var Subtitles = typeof globalThis !== "undefined" ? globalThis.PlezyTVSubtitles : null;
+  if (!Subtitles && typeof require === "function") {
+    try { Subtitles = require("./subtitle-runtime.js"); } catch (_) { Subtitles = null; }
+  }
 
   function uuid() {
     if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -109,6 +113,103 @@
   function number(value, fallback) {
     var parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : (fallback || 0);
+  }
+
+  function hasOwn(object, key) {
+    return Object.prototype.hasOwnProperty.call(object || {}, key);
+  }
+
+  function isOffSubtitle(selection) {
+    if (Subtitles && Subtitles.isOffSelection) return Subtitles.isOffSelection(selection);
+    return selection === null || selection === false || selection === -1 || selection === "-1" ||
+      selection === "off" || Boolean(selection && (selection.off || selection.id === "off"));
+  }
+
+  function subtitleBySelection(tracks, selection, explicit) {
+    tracks = array(tracks);
+    if (explicit && isOffSubtitle(selection)) return null;
+    if (selection !== undefined && selection !== null && !isOffSubtitle(selection)) {
+      var selectedId = typeof selection === "object" ? (selection.id === undefined ? selection.exactTrackId : selection.id) : selection;
+      var match = null;
+      tracks.some(function (track) {
+        if (selectedId === undefined || selectedId === null || String(track.id) !== String(selectedId)) return false;
+        match = track;
+        return true;
+      });
+      if (!match && Subtitles && Subtitles.matchSubtitleTrack && typeof selection === "object") {
+        match = Subtitles.matchSubtitleTrack(tracks, selection);
+      }
+      if (match) return match;
+    }
+    var fallback = null;
+    tracks.some(function (track) {
+      if (!track.selected) return false;
+      fallback = track;
+      return true;
+    });
+    if (fallback) return fallback;
+    tracks.some(function (track) {
+      if (!track.default) return false;
+      fallback = track;
+      return true;
+    });
+    if (fallback) return fallback;
+    tracks.some(function (track) {
+      if (!track.forced) return false;
+      fallback = track;
+      return true;
+    });
+    return fallback;
+  }
+
+  function subtitleDeliveryForTrack(track) {
+    if (!track) return "off";
+    if (Subtitles && Subtitles.subtitleDeliveryFor) return Subtitles.subtitleDeliveryFor(track);
+    return track.external ? "external" : "native";
+  }
+
+  function markSelectedSubtitleTracks(tracks, selected) {
+    return array(tracks).map(function (track) {
+      var result = Object.assign({}, track);
+      result.selected = Boolean(selected && String(selected.id) === String(track.id));
+      return result;
+    });
+  }
+
+  function absoluteServerUrl(baseUrl, value) {
+    value = String(value || "");
+    if (!value) return "";
+    return /^https?:\/\//i.test(value) ? value : joinUrl(baseUrl, value);
+  }
+
+  function subtitleFileExtension(codec) {
+    codec = String(codec || "").toLowerCase();
+    if (codec === "subrip" || codec === "srt") return "srt";
+    if (codec === "webvtt" || codec === "vtt") return "vtt";
+    if (codec === "ssa") return "ssa";
+    if (codec === "ass") return "ass";
+    return "srt";
+  }
+
+  function appendSubtitleExtension(value, extension) {
+    value = String(value || "");
+    var suffixAt = value.search(/[?#]/);
+    var path = suffixAt === -1 ? value : value.slice(0, suffixAt);
+    var suffix = suffixAt === -1 ? "" : value.slice(suffixAt);
+    if (/\.(?:srt|vtt|ass|ssa)$/i.test(path)) return value;
+    return path + "." + extension + suffix;
+  }
+
+  function authenticatedServerUrl(baseUrl, value, query) {
+    var source = String(value || "");
+    var url = absoluteServerUrl(baseUrl, source);
+    if (/^https?:\/\//i.test(source)) {
+      var serverBase = trimSlash(baseUrl);
+      var belongsToServer = url === serverBase || url.indexOf(serverBase + "/") === 0 ||
+        url.indexOf(serverBase + "?") === 0 || url.indexOf(serverBase + "#") === 0;
+      if (!belongsToServer) return url;
+    }
+    return withQuery(url, query);
   }
 
   function chooseUpNext(items) {
@@ -601,23 +702,154 @@
     });
   };
 
-  PlexClient.prototype.getDetails = function (itemId) {
+  PlexClient.prototype.getDetails = function (itemId, options) {
+    options = options || {};
     var self = this;
     return this._request("/library/metadata/" + encodeURIComponent(itemId), {
       includeExtras: 1,
-      includeChapters: 1
-    }).then(function (payload) {
+      includeChapters: 1,
+      includeMedia: 1,
+      includeStreamInfo: 1
+    }, { timeoutMs: options.timeoutMs }).then(function (payload) {
       var raw = array(self._container(payload).Metadata)[0];
       if (!raw) throw apiError("This item is no longer available.");
       return self._item(raw);
     });
   };
 
-  PlexClient.prototype.createPlayback = function (item) {
+  PlexClient.prototype.subtitleTracksForItem = function (item) {
+    return Subtitles && Subtitles.normalizePlexSubtitleTracks
+      ? Subtitles.normalizePlexSubtitleTracks(item)
+      : [];
+  };
+
+  PlexClient.prototype.subtitleUrlForTrack = function (track) {
+    if (!track || !track.external || !track.key) return "";
+    var path = appendSubtitleExtension(track.key, subtitleFileExtension(track.codec));
+    return authenticatedServerUrl(this.baseUrl, path, {
+      encoding: "utf-8",
+      "X-Plex-Token": this.token
+    });
+  };
+
+  PlexClient.prototype.searchSubtitles = function (itemId, filters) {
+    filters = filters || {};
+    var self = this;
+    return this._request("/library/metadata/" + encodeURIComponent(itemId) + "/subtitles", {
+      language: filters.language || "en",
+      title: filters.title,
+      hearingImpaired: filters.hearingImpaired ? 1 : 0,
+      forced: filters.forced ? 1 : 0
+    }).then(function (payload) {
+      return array(self._container(payload).Stream).map(function (raw) {
+        return {
+          id: String(raw.id === undefined || raw.id === null ? "" : raw.id),
+          key: raw.key || "",
+          codec: String(raw.codec || "").toLowerCase(),
+          language: raw.language || "",
+          languageCode: Subtitles && Subtitles.canonicalLanguage
+            ? Subtitles.canonicalLanguage(raw.languageCode || filters.language)
+            : (raw.languageCode || filters.language || ""),
+          title: raw.displayTitle || raw.title || "",
+          displayTitle: raw.displayTitle || "",
+          providerTitle: raw.providerTitle || "",
+          hearingImpaired: truthy(raw.hearingImpaired),
+          forced: truthy(raw.forced),
+          score: number(raw.score),
+          downloaded: truthy(raw.downloaded),
+          perfectMatch: truthy(raw.perfectMatch),
+          raw: raw
+        };
+      });
+    });
+  };
+
+  PlexClient.prototype.downloadSubtitle = function (itemId, subtitle) {
+    subtitle = subtitle || {};
+    return this._request("/library/metadata/" + encodeURIComponent(itemId) + "/subtitles", {
+      key: subtitle.key,
+      codec: subtitle.codec,
+      language: subtitle.languageCode || subtitle.language,
+      hearingImpaired: subtitle.hearingImpaired ? 1 : 0,
+      forced: subtitle.forced ? 1 : 0,
+      providerTitle: subtitle.providerTitle || subtitle.title
+    }, { method: "PUT" }).then(function () { return true; });
+  };
+
+  PlexClient.prototype.waitForSubtitle = function (itemId, existingIds, options) {
+    options = options || {};
+    var self = this;
+    var known = {};
+    array(existingIds).forEach(function (id) { known[String(id)] = true; });
+    var timeoutMs = Math.max(0, number(options.timeoutMs, 10000));
+    var intervalMs = Math.max(0, number(options.intervalMs, 1000));
+    var now = options.now || function () { return Date.now(); };
+    var delay = options.delay || function (milliseconds) {
+      return new Promise(function (resolve) { setTimeout(resolve, milliseconds); });
+    };
+    var deadline = now() + timeoutMs;
+
+    function timedOut() {
+      var error = apiError("The downloaded subtitle did not appear before the 10-second timeout.");
+      error.code = "SUBTITLE_DOWNLOAD_TIMEOUT";
+      return error;
+    }
+
+    function waitAndPoll() {
+      if (now() >= deadline) return Promise.reject(timedOut());
+      return delay(Math.min(intervalMs, Math.max(0, deadline - now()))).then(poll);
+    }
+
+    function poll() {
+      if (now() >= deadline) return Promise.reject(timedOut());
+      return self.getDetails(itemId, { timeoutMs: Math.max(100, deadline - now()) }).then(function (detail) {
+        var tracks = self.subtitleTracksForItem(detail);
+        var additions = tracks.filter(function (track) { return !known[String(track.id)]; });
+        var found = null;
+        var wanted = options.matchResult || options.match;
+        if (wanted && additions.length && Subtitles && Subtitles.matchSubtitleTrack) {
+          found = Subtitles.matchSubtitleTrack(additions, wanted);
+        }
+        found = found || additions[0] || null;
+        if (found) return { item: detail, track: found, subtitleTracks: tracks };
+        return waitAndPoll();
+      }).catch(function (error) {
+        if (error && (error.status === 401 || error.status === 403 || error.code === "SUBTITLE_DOWNLOAD_TIMEOUT")) throw error;
+        return waitAndPoll();
+      });
+    }
+
+    return poll();
+  };
+
+  PlexClient.prototype.selectSubtitleStream = function (partId, subtitleStreamId) {
+    return this._request("/library/parts/" + encodeURIComponent(partId), {
+      subtitleStreamID: subtitleStreamId,
+      allParts: 1
+    }, { method: "PUT" }).then(function () { return true; });
+  };
+
+  PlexClient.prototype.createPlayback = function (item, options) {
+    options = options || {};
     var self = this;
     var loadDetails = item && item.raw && item.raw.Media ? Promise.resolve(item) : this.getDetails(item.id);
     return loadDetails.then(function (detail) {
       if (!detail.playable) throw apiError("Choose a playable movie or episode.");
+      var subtitleTracks = self.subtitleTracksForItem(detail);
+      var explicitSubtitle = hasOwn(options, "subtitleSelection");
+      var selectedSubtitle = subtitleBySelection(subtitleTracks, options.subtitleSelection, explicitSubtitle);
+      subtitleTracks = markSelectedSubtitleTracks(subtitleTracks, selectedSubtitle);
+      if (selectedSubtitle) {
+        subtitleTracks.some(function (track) {
+          if (String(track.id) !== String(selectedSubtitle.id)) return false;
+          selectedSubtitle = track;
+          return true;
+        });
+      }
+      var subtitleDelivery = subtitleDeliveryForTrack(selectedSubtitle);
+      var startMs = hasOwn(options, "startMs")
+        ? Math.max(0, number(options.startMs))
+        : Math.max(0, detail.resumeMs || 0);
       var sessionId = uuid();
       var metadataPath = "/library/metadata/" + detail.id;
       var streamUrl = withQuery(joinUrl(self.baseUrl, "/video/:/transcode/universal/start.m3u8"), {
@@ -630,7 +862,8 @@
         directStream: 1,
         directStreamAudio: 1,
         hasMDE: 1,
-        subtitles: "burn",
+        subtitles: subtitleDelivery === "burned" ? "burn" : (subtitleDelivery === "off" ? "none" : "auto"),
+        subtitleStreamID: selectedSubtitle ? selectedSubtitle.id : (explicitSubtitle ? 0 : undefined),
         subtitleSize: 100,
         audioBoost: 100,
         videoQuality: 100,
@@ -638,7 +871,7 @@
         maxVideoBitrate: 20000,
         mediaBufferSize: 60000,
         location: self.server && self.server.local === false ? "wan" : "lan",
-        offset: Math.floor(detail.resumeMs / 1000),
+        offset: Math.floor(startMs / 1000),
         session: sessionId,
         "X-Plex-Client-Profile-Name": "Generic",
         "X-Plex-Client-Profile-Extra": PLEX_TIZEN_PROFILE,
@@ -651,7 +884,7 @@
       });
       var media = array(detail.raw.Media)[0] || {};
       var part = array(media.Part)[0] || {};
-      var directUrl = part.key
+      var directUrl = part.key && subtitleDelivery !== "burned" && subtitleDelivery !== "external"
         ? withQuery(joinUrl(self.baseUrl, part.key), { "X-Plex-Token": self.token })
         : "";
       return {
@@ -660,11 +893,24 @@
         url: streamUrl,
         directUrl: directUrl,
         sessionId: sessionId,
-        startMs: detail.resumeMs,
-        durationMs: detail.durationMs
+        partId: part.id === undefined || part.id === null ? "" : String(part.id),
+        startMs: startMs,
+        durationMs: detail.durationMs,
+        subtitleTracks: subtitleTracks,
+        selectedSubtitle: selectedSubtitle || null,
+        subtitleDelivery: subtitleDelivery,
+        subtitleUrl: subtitleDelivery === "external" ? self.subtitleUrlForTrack(selectedSubtitle) : ""
       };
     });
   };
+
+  PlexClient.prototype.rebuildPlayback = function (playback, options) {
+    options = Object.assign({}, options || {});
+    if (!hasOwn(options, "startMs")) options.startMs = playback && playback.startMs || 0;
+    return this.createPlayback(playback && playback.item, options);
+  };
+
+  PlexClient.prototype.rebuildPlaybackUrl = PlexClient.prototype.rebuildPlayback;
 
   PlexClient.prototype.reportProgress = function (playback, positionMs, state) {
     if (!playback || !playback.item) return Promise.resolve();
@@ -904,46 +1150,202 @@
     }).then(function (payload) { return self._item(payload); });
   };
 
-  JellyfinClient.prototype.createPlayback = function (item) {
+  JellyfinClient.prototype.subtitleTracksForItem = function (item) {
+    return Subtitles && Subtitles.normalizeJellyfinSubtitleTracks
+      ? Subtitles.normalizeJellyfinSubtitleTracks(item)
+      : [];
+  };
+
+  JellyfinClient.prototype.defaultSubtitleSelectionForItem = function (item) {
+    var source = item && item.raw && array(item.raw.MediaSources)[0] || {};
+    if (Number(source.DefaultSubtitleStreamIndex) === -1) {
+      return Subtitles && Subtitles.OFF_TRACK ? Subtitles.OFF_TRACK : { id: "off", off: true };
+    }
+    if (source.DefaultSubtitleStreamIndex === undefined || source.DefaultSubtitleStreamIndex === null) return null;
+    var wantedIndex = Number(source.DefaultSubtitleStreamIndex);
+    var selected = null;
+    this.subtitleTracksForItem(item).some(function (track) {
+      if (Number(track.index) !== wantedIndex) return false;
+      selected = track;
+      return true;
+    });
+    return selected;
+  };
+
+  JellyfinClient.prototype.subtitleUrlForTrack = function (itemId, mediaSourceId, track) {
+    if (!track || !track.external) return "";
+    var path = track.deliveryUrl;
+    if (!path) {
+      path = "/Videos/" + encodeURIComponent(itemId) + "/" + encodeURIComponent(mediaSourceId) +
+        "/Subtitles/" + encodeURIComponent(track.index) + "/Stream." + subtitleFileExtension(track.codec);
+    }
+    return authenticatedServerUrl(this.baseUrl, path, { api_key: this.token });
+  };
+
+  JellyfinClient.prototype.getPlaybackInfo = function (itemId, options) {
+    options = options || {};
+    var subtitleIndex = options.subtitleStreamIndex;
+    var startTimeTicks = Math.max(0, Math.round(number(options.startMs) * 10000));
+    var body = {
+      UserId: this.userId,
+      DeviceId: deviceId(),
+      MediaSourceId: options.mediaSourceId || undefined,
+      StartTimeTicks: startTimeTicks,
+      SubtitleStreamIndex: subtitleIndex,
+      EnableDirectPlay: true,
+      EnableDirectStream: true,
+      EnableTranscoding: true,
+      AllowVideoStreamCopy: true,
+      AllowAudioStreamCopy: true,
+      DeviceProfile: {
+        Name: "Plezy Samsung Tizen",
+        MaxStreamingBitrate: 20000000,
+        TranscodingProfiles: [{
+          Type: "Video",
+          Context: "Streaming",
+          Protocol: "hls",
+          Container: "ts",
+          VideoCodec: "h264",
+          AudioCodec: "aac,ac3,eac3,mp3"
+        }],
+        SubtitleProfiles: [
+          { Format: "srt", Method: "Embed" },
+          { Format: "subrip", Method: "Embed" },
+          { Format: "vtt", Method: "Embed" },
+          { Format: "webvtt", Method: "Embed" },
+          { Format: "ass", Method: "Embed" },
+          { Format: "ssa", Method: "Embed" },
+          { Format: "srt", Method: "External" },
+          { Format: "subrip", Method: "External" },
+          { Format: "vtt", Method: "External" },
+          { Format: "webvtt", Method: "External" },
+          { Format: "ass", Method: "External" },
+          { Format: "ssa", Method: "External" },
+          { Format: "pgssub", Method: "Encode" },
+          { Format: "dvdsub", Method: "Encode" },
+          { Format: "dvbsub", Method: "Encode" }
+        ]
+      }
+    };
+    return this._request("/Items/" + encodeURIComponent(itemId) + "/PlaybackInfo", {
+      UserId: this.userId,
+      MediaSourceId: options.mediaSourceId,
+      StartTimeTicks: startTimeTicks,
+      SubtitleStreamIndex: subtitleIndex
+    }, { method: "POST", body: body });
+  };
+
+  JellyfinClient.prototype.createPlayback = function (item, options) {
+    options = options || {};
     var self = this;
     var loadDetails = item && item.raw && item.raw.MediaSources ? Promise.resolve(item) : this.getDetails(item.id);
     return loadDetails.then(function (detail) {
       if (!detail.playable) throw apiError("Choose a playable movie or episode.");
       var mediaSource = array(detail.raw.MediaSources)[0] || {};
-      var playSessionId = uuid();
-      var streamUrl = withQuery(joinUrl(self.baseUrl, "/Videos/" + encodeURIComponent(detail.id) + "/master.m3u8"), {
-        UserId: self.userId,
-        DeviceId: deviceId(),
-        MediaSourceId: mediaSource.Id,
-        PlaySessionId: playSessionId,
-        api_key: self.token,
-        VideoCodec: "h264",
-        AudioCodec: "aac",
-        TranscodingContainer: "ts",
-        SegmentContainer: "ts",
-        AllowVideoStreamCopy: true,
-        AllowAudioStreamCopy: true,
-        EnableAutoStreamCopy: true,
-        BreakOnNonKeyFrames: false,
-        StartTimeTicks: Math.round(detail.resumeMs * 10000)
+      var subtitleTracks = self.subtitleTracksForItem(detail);
+      var explicitSubtitle = hasOwn(options, "subtitleSelection");
+      var serverSubtitleOff = !explicitSubtitle && Number(mediaSource.DefaultSubtitleStreamIndex) === -1;
+      var selectedSubtitle = serverSubtitleOff
+        ? null
+        : subtitleBySelection(subtitleTracks, options.subtitleSelection, explicitSubtitle);
+      var requestedSubtitleIndex;
+      if (explicitSubtitle) requestedSubtitleIndex = selectedSubtitle ? selectedSubtitle.index : -1;
+      else if (selectedSubtitle) requestedSubtitleIndex = selectedSubtitle.index;
+      else if (mediaSource.DefaultSubtitleStreamIndex !== undefined && mediaSource.DefaultSubtitleStreamIndex !== null) {
+        requestedSubtitleIndex = number(mediaSource.DefaultSubtitleStreamIndex, -1);
+      } else requestedSubtitleIndex = -1;
+      subtitleTracks = markSelectedSubtitleTracks(subtitleTracks, selectedSubtitle);
+      if (selectedSubtitle) {
+        subtitleTracks.some(function (track) {
+          if (String(track.id) !== String(selectedSubtitle.id)) return false;
+          selectedSubtitle = track;
+          return true;
+        });
+      }
+      var startMs = hasOwn(options, "startMs")
+        ? Math.max(0, number(options.startMs))
+        : Math.max(0, detail.resumeMs || 0);
+      var negotiate = explicitSubtitle || options.negotiate === true;
+      var pendingNegotiation = negotiate ? self.getPlaybackInfo(detail.id, {
+        mediaSourceId: mediaSource.Id,
+        startMs: startMs,
+        subtitleStreamIndex: requestedSubtitleIndex
+      }).catch(function () { return null; }) : Promise.resolve(null);
+
+      return pendingNegotiation.then(function (negotiation) {
+        var negotiatedSources = negotiation && array(negotiation.MediaSources);
+        var negotiatedSource = null;
+        array(negotiatedSources).some(function (source) {
+          if (mediaSource.Id && source.Id !== mediaSource.Id) return false;
+          negotiatedSource = source;
+          return true;
+        });
+        negotiatedSource = negotiatedSource || array(negotiatedSources)[0] || mediaSource;
+        if (negotiatedSource.MediaStreams) {
+          var refreshedTracks = Subtitles && Subtitles.normalizeJellyfinSubtitleTracks
+            ? Subtitles.normalizeJellyfinSubtitleTracks(negotiatedSource)
+            : subtitleTracks;
+          var refreshedSelected = subtitleBySelection(refreshedTracks,
+            selectedSubtitle || (requestedSubtitleIndex === -1 ? null : { id: String(requestedSubtitleIndex) }), true);
+          subtitleTracks = markSelectedSubtitleTracks(refreshedTracks, refreshedSelected);
+          selectedSubtitle = refreshedSelected;
+        }
+        var subtitleDelivery = subtitleDeliveryForTrack(selectedSubtitle);
+        var playSessionId = negotiation && negotiation.PlaySessionId || uuid();
+        var negotiatedPath = negotiatedSource.TranscodingUrl || negotiatedSource.DirectStreamUrl || "";
+        var streamUrl = negotiatedPath ? absoluteServerUrl(self.baseUrl, negotiatedPath) : withQuery(
+          joinUrl(self.baseUrl, "/Videos/" + encodeURIComponent(detail.id) + "/master.m3u8"), {
+            UserId: self.userId,
+            DeviceId: deviceId(),
+            MediaSourceId: negotiatedSource.Id || mediaSource.Id,
+            PlaySessionId: playSessionId,
+            api_key: self.token,
+            VideoCodec: "h264",
+            AudioCodec: "aac",
+            TranscodingContainer: "ts",
+            SegmentContainer: "ts",
+            AllowVideoStreamCopy: true,
+            AllowAudioStreamCopy: true,
+            EnableAutoStreamCopy: true,
+            BreakOnNonKeyFrames: false,
+            StartTimeTicks: Math.round(startMs * 10000),
+            SubtitleStreamIndex: requestedSubtitleIndex
+          });
+        if (streamUrl.indexOf("api_key=") === -1) streamUrl = withQuery(streamUrl, { api_key: self.token });
+        var directUrl = subtitleDelivery === "burned" || subtitleDelivery === "external" ? "" : withQuery(
+          joinUrl(self.baseUrl, "/Videos/" + encodeURIComponent(detail.id) + "/stream"), {
+            static: true,
+            MediaSourceId: negotiatedSource.Id || mediaSource.Id,
+            api_key: self.token
+          });
+        return {
+          provider: "jellyfin",
+          item: detail,
+          url: streamUrl,
+          directUrl: directUrl,
+          sessionId: playSessionId,
+          mediaSourceId: negotiatedSource.Id || mediaSource.Id || "",
+          startMs: startMs,
+          durationMs: detail.durationMs,
+          subtitleTracks: subtitleTracks,
+          selectedSubtitle: selectedSubtitle || null,
+          subtitleDelivery: subtitleDelivery,
+          subtitleStreamIndex: requestedSubtitleIndex,
+          subtitleUrl: subtitleDelivery === "external"
+            ? self.subtitleUrlForTrack(detail.id, negotiatedSource.Id || mediaSource.Id, selectedSubtitle)
+            : ""
+        };
       });
-      var directUrl = withQuery(joinUrl(self.baseUrl, "/Videos/" + encodeURIComponent(detail.id) + "/stream"), {
-        static: true,
-        MediaSourceId: mediaSource.Id,
-        api_key: self.token
-      });
-      return {
-        provider: "jellyfin",
-        item: detail,
-        url: streamUrl,
-        directUrl: directUrl,
-        sessionId: playSessionId,
-        mediaSourceId: mediaSource.Id || "",
-        startMs: detail.resumeMs,
-        durationMs: detail.durationMs
-      };
     });
   };
+
+  JellyfinClient.prototype.rebuildPlayback = function (playback, options) {
+    options = Object.assign({}, options || {});
+    if (!hasOwn(options, "startMs")) options.startMs = playback && playback.startMs || 0;
+    return this.createPlayback(playback && playback.item, options);
+  };
+
+  JellyfinClient.prototype.rebuildPlaybackUrl = JellyfinClient.prototype.rebuildPlayback;
 
   JellyfinClient.prototype.reportProgress = function (playback, positionMs, state) {
     if (!playback || !playback.item) return Promise.resolve();

@@ -172,6 +172,9 @@
     <section id="player-screen" class="screen player-screen hidden">
       <object id="av-player" type="application/avplayer" aria-label="Video player"></object>
       <video id="html-player" playsinline preload="metadata"></video>
+      <div id="subtitle-overlay" class="subtitle-overlay" aria-live="off" aria-hidden="true">
+        <div id="subtitle-cue" class="subtitle-cue"></div>
+      </div>
       <div id="player-chrome" class="player-chrome">
         <div>
           <p id="player-subtitle" class="eyebrow"></p>
@@ -182,8 +185,32 @@
           <div class="progress-track"><div id="player-progress-fill"></div></div>
           <span id="player-duration">0:00</span>
         </div>
-        <p class="player-hint">Play/Pause · Left/Right seek · Back to exit</p>
+        <div id="player-action-row" class="player-action-row" role="toolbar" aria-label="Player actions">
+          <button id="player-play-action" class="player-action" data-player-action="play" data-focusable="false">Ⅱ Pause</button>
+          <button id="player-subtitles-action" class="player-action" data-player-action="subtitles" data-focusable="false">CC Subtitles</button>
+        </div>
+        <p class="player-hint">Play/Pause · Left/Right seek · Down for controls · Back to exit</p>
       </div>
+      <aside id="subtitle-panel" class="subtitle-panel hidden" aria-label="Subtitle controls" aria-hidden="true">
+        <header class="subtitle-panel-header">
+          <div>
+            <p class="eyebrow">PLAYBACK</p>
+            <h2>Subtitles</h2>
+          </div>
+          <button class="icon-button" data-subtitle-action="close" data-focusable="true" aria-label="Close subtitle controls">×</button>
+        </header>
+        <p id="subtitle-delivery-note" class="subtitle-delivery-note"></p>
+        <nav class="subtitle-tabs" aria-label="Subtitle control sections">
+          <button data-subtitle-tab="tracks" data-focusable="true">Tracks</button>
+          <button data-subtitle-tab="appearance" data-focusable="true">Appearance</button>
+          <button data-subtitle-tab="sync" data-focusable="true">Sync</button>
+          <button id="subtitle-search-tab" data-subtitle-tab="search" data-focusable="true">Search</button>
+        </nav>
+        <div id="subtitle-panel-scroll" class="subtitle-panel-scroll">
+          <div id="subtitle-panel-body"></div>
+          <p id="subtitle-panel-status" class="subtitle-panel-status" role="status"></p>
+        </div>
+      </aside>
     </section>
 
     <div id="toast" class="toast hidden" role="status"></div>
@@ -193,6 +220,7 @@
   <script src="$B2BAPIS/b2bapis/b2bapis.js"></script>
   <script src="js/navigation.js"></script>
   <script src="js/identity-store.js"></script>
+  <script src="js/subtitle-runtime.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
 </body>

@@ -6,7 +6,7 @@ Version 2.10.2 adds Tizen 6-compatible full-screen positioning, resilient Plex h
 
 Version 2.10.3 streamlines TV navigation: home and episode cards play directly, shows automatically display seasons and offer Play First/Next/Resume Episode, seasons automatically display episodes, and episode selection starts playback without an extra detail page. D-pad navigation avoids smooth scrolling and expensive focus animation, home shelves render bounded card sets, and large libraries load 60 cards at a time.
 
-Samsung revision `2.10.5-samsung.8` replaces local Plezy profiles with provider identities, moves Plex Home discovery and switching to Plex's v2 client API, and makes Nick Mode an app-wide preference.
+Samsung revision `2.10.5-samsung.9` adds full remote-friendly subtitle selection, Plex subtitle search/download, synchronization, custom text rendering, and remembered appearance and language preferences. It retains the provider-identity, Plex Home, multi-server, and global Nick Mode behavior introduced in the previous revision.
 
 The navigation runtime builds its focus graph after each render, keeps geometry work out of D-pad key events, and explicitly loads artwork for the visible cards plus a small look-ahead window. The application and Samsung AVPlay display rectangle intentionally remain on the 1920×1080 logical TV canvas.
 
@@ -18,7 +18,17 @@ Nick Mode is global to the Samsung app and remains enabled when switching betwee
 
 Identity state is stored in `plezy-tv-identities-v3`. On first launch after an upgrade, the app transactionally migrates every Plex binding, Jellyfin account, saved server, last-used identity, and Nick Mode preference from `plezy-tv-profiles-v2` or `plezy-tv-session-v1`. Legacy storage is removed only after the v3 document is written and read back successfully. Provider access tokens remain only in Tizen local storage.
 
-Runtime files are `config.xml`, `index.html`, `icon.png`, `nick-mode.png`, `css/app.css`, `js/identity-store.js`, `js/api.js`, `js/navigation.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
+Runtime files are `config.xml`, `index.html`, `icon.png`, `nick-mode.png`, `css/app.css`, `js/identity-store.js`, `js/subtitle-runtime.js`, `js/api.js`, `js/navigation.js`, and `js/app.js`. The source handoff also contains `tizen_web_project.yaml`, the Node package metadata, tests, and the package validator; the project metadata excludes those development-only files from the installed WGT.
+
+## Player and subtitle controls
+
+Playback continues while the subtitle panel is open. In normal transport mode, Left and Right seek by 30 seconds and Play/Pause toggles playback. Press Down to focus the player action row, use Left/Right to choose Play/Pause or Subtitles, press Select to activate it, and press Up to return to transport mode. Back closes the subtitle panel first; a subsequent Back exits playback.
+
+The Tracks tab includes Off and every subtitle stream reported by Plex or Jellyfin. Labels identify language, title, forced tracks, SDH/CC, external files, and codecs. Plex playback also includes a Search tab with language and optional title filters; a downloaded result is polled for up to 10 seconds and selected as soon as Plex adds it to the item. Jellyfin does not expose this Plex subtitle-provider endpoint, so its panel intentionally omits Search.
+
+Text subtitles use a safe Plezy overlay and can be customized for font size, text and outline colors, outline thickness, background color and opacity, bold, italic, and vertical position. Synchronization ranges from −60 to +60 seconds in 100 ms steps. The app stores these settings, global language/Off preference, and identity/server-scoped movie or series choices in `plezy-tv-subtitles-v1` without modifying provider account preferences.
+
+PGS, VobSub/DVD, DVB, and other bitmap subtitle formats cannot be represented as text. Plex or Jellyfin must burn those subtitles into the video, so appearance and synchronization controls are disabled for them. Actual delivery and codec support still depend on the server's HLS transcoder and the TV model's AVPlay firmware; direct-play fallback cannot preserve server burn-in.
 
 ## Local checks
 

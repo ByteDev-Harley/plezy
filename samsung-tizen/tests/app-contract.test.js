@@ -11,6 +11,7 @@ var navigation = fs.readFileSync(path.join(root, "js", "navigation.js"), "utf8")
 var css = fs.readFileSync(path.join(root, "css", "app.css"), "utf8");
 var index = fs.readFileSync(path.join(root, "index.html"), "utf8");
 var identities = fs.readFileSync(path.join(root, "js", "identity-store.js"), "utf8");
+var subtitles = fs.readFileSync(path.join(root, "js", "subtitle-runtime.js"), "utf8");
 var preview = fs.readFileSync(path.join(root, "tests", "tv-preview.html"), "utf8");
 var projectYaml = fs.readFileSync(path.join(root, "tizen_web_project.yaml"), "utf8");
 var validator = fs.readFileSync(path.join(root, "tools", "validate-package.js"), "utf8");
@@ -26,6 +27,7 @@ test("resumed transcodes retain their absolute timeline position", function () {
 test("Back retains playback, detail-stack, route, provider-management, and exit behavior", function () {
   var goBack = app.slice(app.indexOf("function goBack()"), app.indexOf("function handleHardwareBack()"));
   assert.match(goBack, /state\.player\.stop\(false\)/);
+  assert.match(goBack, /state\.player\.closeSubtitlePanel\(\)/);
   assert.match(goBack, /state\.detailStack\.pop\(\)/);
   assert.match(goBack, /renderProviderManagement\(\)/);
   assert.match(goBack, /renderIdentityPicker\(\)/);
@@ -168,6 +170,42 @@ test("playback progress remains bound to the client that created the playback", 
   assert.match(player, /PlayerController\.prototype\.teardown/);
 });
 
+test("subtitle panel keeps playback active and implements player focus modes", function () {
+  var player = app.slice(app.indexOf("function PlayerController"), app.indexOf("function moveFocus"));
+  assert.match(index, /id="player-action-row"/);
+  assert.match(index, /data-player-action="play"/);
+  assert.match(index, /data-player-action="subtitles"/);
+  assert.match(index, /id="subtitle-panel"/);
+  assert.match(index, /id="subtitle-overlay"/);
+  assert.match(player, /focusMode = "transport"/);
+  assert.match(player, /focusMode = "row"/);
+  assert.match(player, /focusMode = "panel"/);
+  assert.match(player, /playerFocusTransition/);
+  assert.match(player, /setSelectTrack\("TEXT"/);
+  assert.match(player, /createPlayback\(itemOverride \|\| oldPlayback\.item/);
+  assert.match(player, /startMs: position/);
+  assert.match(player, /var wasPaused = this\.paused/);
+  assert.match(player, /if \(self\.paused\) player\.pause\(\)/);
+  assert.match(player, /if \(this\.focusMode === "row" \|\| this\.focusMode === "panel"\) return/);
+});
+
+test("custom subtitle rendering uses text nodes, AVPlay callbacks, and burned-format gating", function () {
+  var player = app.slice(app.indexOf("function PlayerController"), app.indexOf("function moveFocus"));
+  assert.match(player, /onsubtitlechange/);
+  assert.match(player, /setSilentSubtitle/);
+  assert.match(player, /setSubtitlePosition/);
+  assert.match(player, /document\.createTextNode\(run\.text\)/);
+  assert.match(player, /window\.fetch\(url\)/);
+  assert.match(player, /Subtitles\.parseSubtitleCues/);
+  assert.match(player, /externalCueLoadingUrl !== url/);
+  assert.doesNotMatch(player.slice(player.indexOf("PlayerController.prototype._renderCue"), player.indexOf("PlayerController.prototype.applySubtitleStyle")), /innerHTML/);
+  assert.match(player, /subtitleDelivery === "burned"/);
+  assert.match(player, /SUBTITLE_DOWNLOAD_TIMEOUT|10 seconds/);
+  assert.match(css, /\.subtitle-overlay/);
+  assert.match(css, /\.subtitle-panel/);
+  assert.match(subtitles, /plezy-tv-subtitles-v1/);
+});
+
 test("Nick Mode is global, changes only general branding, and honors reduced motion", function () {
   var branding = app.slice(app.indexOf("function applyBranding"), app.indexOf("function show(element)"));
   assert.equal((index.match(/\bmain-logo\b/g) || []).length, 3);
@@ -185,11 +223,15 @@ test("Nick Mode is global, changes only general branding, and honors reduced mot
 test("identity store, package metadata, source revision, and Nick asset are synchronized", function () {
   assert.match(index, /src="js\/identity-store\.js"/);
   assert.ok(index.indexOf('src="js/identity-store.js"') < index.indexOf('src="js/app.js"'));
+  assert.match(index, /src="js\/subtitle-runtime\.js"/);
+  assert.ok(index.indexOf('src="js/subtitle-runtime.js"') < index.indexOf('src="js/app.js"'));
   assert.match(identities, /plezy-tv-identities-v3/);
   assert.match(identities, /plezy-tv-profiles-v2/);
   assert.match(projectYaml, /^\s+- js\/identity-store\.js$/m);
+  assert.match(projectYaml, /^\s+- js\/subtitle-runtime\.js$/m);
   assert.match(buildScript, /node --check js\/identity-store\.js/);
-  assert.match(packageJson, /2\.10\.5-samsung\.8/);
+  assert.match(buildScript, /node --check js\/subtitle-runtime\.js/);
+  assert.match(packageJson, /2\.10\.5-samsung\.9/);
   assert.equal(fs.existsSync(path.join(root, "nick-mode.png")), true);
   assert.match(projectYaml, /^\s+- nick-mode\.png$/m);
   assert.match(validator, /Missing Nick Mode branding asset/);

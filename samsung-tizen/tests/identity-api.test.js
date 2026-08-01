@@ -73,7 +73,7 @@ test("Plex Home discovery uses the clients v2 endpoint, parent token, stable Sam
       assert.equal(request.headers["X-Plex-Token"], "parent");
       assert.equal(request.headers["X-Plex-Product"], "Plezy TV");
       assert.equal(request.headers["X-Plex-Platform"], "Tizen");
-      assert.equal(request.headers["X-Plex-Version"], "2.10.5-samsung.8");
+      assert.equal(request.headers["X-Plex-Version"], "2.10.5-samsung.9");
     });
     assert.ok(requests[0].headers["X-Plex-Client-Identifier"]);
     assert.equal(requests[0].headers["X-Plex-Client-Identifier"], requests[1].headers["X-Plex-Client-Identifier"]);
@@ -97,7 +97,7 @@ test("Home switching accepts a 201 JSON response and sends PIN plus all include 
     assert.equal(seen.options.headers["X-Plex-Token"], "parent-token");
     assert.equal(seen.options.headers["X-Plex-Product"], "Plezy TV");
     assert.equal(seen.options.headers["X-Plex-Platform"], "Tizen");
-    assert.equal(seen.options.headers["X-Plex-Version"], "2.10.5-samsung.8");
+    assert.equal(seen.options.headers["X-Plex-Version"], "2.10.5-samsung.9");
     assert.ok(seen.options.headers["X-Plex-Client-Identifier"]);
     assert.equal(seen.url.searchParams.get("pin"), "1234");
     ["includeSubscriptions", "includeProviders", "includeSettings", "includeSharedSettings"].forEach(function (name) {

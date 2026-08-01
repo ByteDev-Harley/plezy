@@ -36,6 +36,7 @@ files:
   - js/app.js
   - js/navigation.js
   - js/identity-store.js
+  - js/subtitle-runtime.js
 
 # list of files to exclude based on the matched patterns
 excludes:

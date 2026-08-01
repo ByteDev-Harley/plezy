@@ -20,6 +20,7 @@ var index = read("index.html");
 var css = read("css/app.css");
 var api = read("js/api.js");
 var identities = read("js/identity-store.js");
+var subtitles = read("js/subtitle-runtime.js");
 var navigation = read("js/navigation.js");
 var app = read("js/app.js");
 var projectYaml = read("tizen_web_project.yaml");
@@ -61,16 +62,17 @@ if (!fs.existsSync(nickModeAssetPath)) {
 }
 if (/<script(?![^>]*\bsrc=)[^>]*>/i.test(index)) failures.push("Inline scripts violate the package CSP.");
 if (/\son[a-z]+\s*=/i.test(index)) failures.push("Inline event handlers violate the package CSP.");
-if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(api + identities + navigation + app)) failures.push("Dynamic code execution is not allowed.");
+if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(api + identities + subtitles + navigation + app)) failures.push("Dynamic code execution is not allowed.");
 if (index.indexOf('content="width=1920,user-scalable=no"') === -1) failures.push("The Samsung viewport must use the 1920px TV canvas.");
 if (index.indexOf('src="js/navigation.js"') === -1 || index.indexOf('src="js/navigation.js"') > index.indexOf('src="js/app.js"')) failures.push("The navigation runtime must load before app.js.");
 if (index.indexOf('src="js/identity-store.js"') === -1 || index.indexOf('src="js/identity-store.js"') > index.indexOf('src="js/app.js"')) failures.push("The identity store must load before app.js.");
+if (index.indexOf('src="js/subtitle-runtime.js"') === -1 || index.indexOf('src="js/subtitle-runtime.js"') > index.indexOf('src="js/app.js"')) failures.push("The subtitle runtime must load before app.js.");
 if (/\binset\s*:/.test(css)) failures.push("CSS inset shorthand is not supported by the Tizen 6 Chromium engine.");
 if (css.indexOf("width: 1920px") === -1 || css.indexOf("height: 1080px") === -1) failures.push("The stylesheet must define a 1920x1080 TV canvas.");
 if (api.indexOf('optional("/library/onDeck")') === -1 || api.indexOf('optional("/library/recentlyAdded")') === -1) failures.push("Plex home fallbacks are missing.");
 if (api.indexOf('directPlay: 0') === -1 || api.indexOf('"X-Plex-Client-Profile-Extra"') === -1) failures.push("The Samsung Plex transcode profile is missing.");
 if (app.indexOf('PLAYER_DISPLAY_MODE_LETTER_BOX') === -1) failures.push("Samsung AVPlay must use TV-safe letterboxing.");
-if (config.indexOf('version="2.10.5"') === -1 || api.indexOf('2.10.5-samsung.8') === -1 || packageJson.indexOf('"version": "2.10.5-samsung.8"') === -1) failures.push("Samsung package versions are not synchronized.");
+if (config.indexOf('version="2.10.5"') === -1 || api.indexOf('2.10.5-samsung.9') === -1 || packageJson.indexOf('"version": "2.10.5-samsung.9"') === -1) failures.push("Samsung package versions are not synchronized.");
 if (index.indexOf('id="detail-more"') !== -1 || app.indexOf('Browse episodes') !== -1) failures.push("The obsolete Browse episodes flow must not be packaged.");
 if (api.indexOf("getShowUpNext") === -1 || api.indexOf("chooseUpNext") === -1) failures.push("Show play-next selection is missing.");
 if (app.indexOf('data-direct-play="true"') === -1 || app.indexOf("loadChildren(detail)") === -1) failures.push("Direct playback or automatic child loading is missing.");
@@ -79,6 +81,10 @@ if (app.indexOf("function handleHardwareBack") === -1 || app.indexOf("lastBackAt
 if (navigation.indexOf("preventScroll: true") === -1 || navigation.indexOf("scrollIntoView") !== -1 || css.indexOf("scroll-behavior: auto") === -1) failures.push("Samsung focus scrolling must remain immediate and conditional.");
 if (css.indexOf(".media-art::after") === -1 || css.indexOf("border: 4px solid transparent") === -1 || css.indexOf("scale(1.035)") === -1) failures.push("Samsung thumbnail focus styling is missing.");
 if (app.indexOf("timelineOffsetMs") === -1 || app.indexOf("resumeSeekPending") === -1) failures.push("Samsung resumed-playback timeline correction is missing.");
+if (subtitles.indexOf('plezy-tv-subtitles-v1') === -1 || subtitles.indexOf("SubtitlePreferenceStore") === -1 || subtitles.indexOf("sanitizeCueText") === -1) failures.push("The Samsung subtitle runtime or preference store is invalid.");
+if (index.indexOf('id="subtitle-panel"') === -1 || index.indexOf('id="subtitle-overlay"') === -1 || app.indexOf('setSelectTrack("TEXT"') === -1 || app.indexOf("setSubtitlePosition") === -1) failures.push("The Samsung subtitle panel or AVPlay integration is missing.");
+if (api.indexOf("subtitleTracks") === -1 || api.indexOf("selectedSubtitle") === -1 || api.indexOf("subtitleDelivery") === -1 || api.indexOf("SubtitleStreamIndex") === -1) failures.push("Provider subtitle playback negotiation is missing.");
+if (api.indexOf("searchSubtitles") === -1 || api.indexOf("downloadSubtitle") === -1 || api.indexOf("SUBTITLE_DOWNLOAD_TIMEOUT") === -1) failures.push("Plex subtitle search/download support is missing.");
 if (app.indexOf("plexServerGroupHtml") === -1 || app.indexOf("data-server-switch") === -1 || api.indexOf("accountToken") === -1 || api.indexOf("orderPlexServers") === -1) failures.push("Plex multi-server library switching is missing.");
 if (identities.indexOf('plezy-tv-identities-v3') === -1 || identities.indexOf('plezy-tv-profiles-v2') === -1 || identities.indexOf("_commitMigration") === -1) failures.push("The v3 identity store or transactional migration is missing.");
 if (api.indexOf("https://clients.plex.tv/api/v2/home/users") === -1 || api.indexOf("switchHomeUser") === -1 || api.indexOf("activateIdentity") === -1) failures.push("Plex Home v2 identity switching is missing.");
@@ -94,6 +100,7 @@ if (projectYaml.indexOf("profile: tv-samsung") === -1 || projectYaml.indexOf('ap
 if (projectYaml.indexOf("  - nick-mode.png") === -1) failures.push("The Nick Mode asset must be included in the Tizen project.");
 if (projectYaml.indexOf("  - js/navigation.js") === -1) failures.push("The navigation runtime must be included in the Tizen project.");
 if (projectYaml.indexOf("  - js/identity-store.js") === -1) failures.push("The identity store must be included in the Tizen project.");
+if (projectYaml.indexOf("  - js/subtitle-runtime.js") === -1) failures.push("The subtitle runtime must be included in the Tizen project.");
 if (projectYaml.indexOf("  - tests/*") === -1 || projectYaml.indexOf("  - tools/*") === -1 || projectYaml.indexOf("  - tizen_web_project.yaml") === -1) failures.push("Development-only files must be excluded from the WGT.");
 
 var packageMatch = config.match(/<tizen:application\s+id="([^"]+)"\s+package="([^"]+)"/);

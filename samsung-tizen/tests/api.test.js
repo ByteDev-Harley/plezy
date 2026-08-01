@@ -160,11 +160,131 @@ test("Plex playback produces Samsung-compatible authenticated HLS and direct-pla
   assert.match(playback.url, /offset=120/);
   assert.match(playback.url, /directPlay=0/);
   assert.match(playback.url, /videoResolution=1920x1080/);
-  assert.match(playback.url, /subtitles=burn/);
+  assert.match(playback.url, /subtitles=none/);
   assert.match(playback.url, /X-Plex-Client-Profile-Extra=/);
-  assert.match(decodeURIComponent(playback.url), /container=mpegts/);
+  assert.match(decodeURIComponent(playback.url), /container=webvtt/);
   assert.match(playback.url, /X-Plex-Token=token%20value/);
   assert.match(playback.directUrl, /library\/parts\/77\/file\.mkv/);
+  assert.deepEqual(playback.subtitleTracks, []);
+  assert.equal(playback.selectedSubtitle, null);
+  assert.equal(playback.subtitleDelivery, "off");
+});
+
+test("Plex playback selects text tracks, Off, and bitmap burn-in explicitly", async function () {
+  var client = new Api.PlexClient({ baseUrl: "https://plex.example", token: "token" });
+  var item = client._item({
+    ratingKey: "8",
+    type: "movie",
+    title: "Tracks",
+    duration: 7200000,
+    Media: [{ Part: [{
+      id: 88,
+      key: "/library/parts/88/file.mkv",
+      Stream: [
+        { streamType: 3, id: 31, index: 2, language: "English", languageCode: "eng", codec: "srt", key: "/library/streams/31?download=1" },
+        { streamType: 3, id: 32, index: 3, language: "English", languageCode: "eng", codec: "pgssub", forced: 1 }
+      ]
+    }] }]
+  });
+
+  var textPlayback = await client.createPlayback(item, { startMs: 345678, subtitleSelection: { id: "31" } });
+  assert.match(textPlayback.url, /offset=345/);
+  assert.match(textPlayback.url, /subtitles=auto/);
+  assert.match(textPlayback.url, /subtitleStreamID=31/);
+  assert.equal(textPlayback.selectedSubtitle.id, "31");
+  assert.equal(textPlayback.subtitleDelivery, "external");
+  assert.match(textPlayback.subtitleUrl, /library\/streams\/31\.srt\?download=1&encoding=utf-8/);
+  assert.match(textPlayback.subtitleUrl, /X-Plex-Token=token/);
+  assert.equal(client.subtitleUrlForTrack({
+    external: true,
+    key: "https://cdn.example/subtitle.vtt",
+    codec: "vtt"
+  }), "https://cdn.example/subtitle.vtt");
+
+  var offPlayback = await client.createPlayback(item, { startMs: 9000, subtitleSelection: { off: true } });
+  assert.match(offPlayback.url, /subtitles=none/);
+  assert.match(offPlayback.url, /subtitleStreamID=0/);
+  assert.equal(offPlayback.selectedSubtitle, null);
+  assert.equal(offPlayback.subtitleDelivery, "off");
+
+  var burnedPlayback = await client.createPlayback(item, { subtitleSelection: { id: "32" } });
+  assert.match(burnedPlayback.url, /subtitles=burn/);
+  assert.match(burnedPlayback.url, /subtitleStreamID=32/);
+  assert.equal(burnedPlayback.subtitleDelivery, "burned");
+  assert.equal(burnedPlayback.directUrl, "");
+});
+
+test("Plex subtitle search and download use the media subtitle endpoint", async function () {
+  var originalFetch = global.fetch;
+  var requests = [];
+  global.fetch = async function (url, options) {
+    requests.push({ url: String(url), options: options || {} });
+    if ((options && options.method) === "PUT") return new Response("", { status: 200 });
+    return new Response(JSON.stringify({ MediaContainer: { Stream: [{
+      id: 77,
+      key: "provider://subtitle/77",
+      language: "English",
+      languageCode: "eng",
+      codec: "srt",
+      providerTitle: "OpenSubtitles",
+      score: 98,
+      hearingImpaired: 1
+    }] } }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    var client = new Api.PlexClient({ baseUrl: "https://plex.example", token: "token" });
+    var results = await client.searchSubtitles("42", { language: "en", title: "Release Name" });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].providerTitle, "OpenSubtitles");
+    assert.equal(results[0].hearingImpaired, true);
+    assert.match(requests[0].url, /library\/metadata\/42\/subtitles/);
+    assert.match(requests[0].url, /language=en/);
+    assert.match(requests[0].url, /title=Release%20Name/);
+    await client.downloadSubtitle("42", results[0]);
+    assert.equal(requests[1].options.method, "PUT");
+    assert.match(requests[1].url, /key=provider%3A%2F%2Fsubtitle%2F77/);
+    assert.match(requests[1].url, /providerTitle=OpenSubtitles/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Plex subtitle metadata polling finds a delayed new stream and times out safely", async function () {
+  var originalFetch = global.fetch;
+  var calls = 0;
+  global.fetch = async function () {
+    calls += 1;
+    var streams = calls < 2
+      ? [{ streamType: 3, id: 1, codec: "srt" }]
+      : [{ streamType: 3, id: 1, codec: "srt" }, { streamType: 3, id: 2, codec: "srt", key: "/library/streams/2" }];
+    return new Response(JSON.stringify({ MediaContainer: { Metadata: [{
+      ratingKey: "42", type: "movie", title: "Example", Media: [{ Part: [{ Stream: streams }] }]
+    }] } }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    var client = new Api.PlexClient({ baseUrl: "https://plex.example", token: "token" });
+    var result = await client.waitForSubtitle("42", ["1"], {
+      timeoutMs: 10000,
+      intervalMs: 0,
+      delay: function () { return Promise.resolve(); }
+    });
+    assert.equal(result.track.id, "2");
+
+    var now = 0;
+    global.fetch = async function () {
+      return new Response(JSON.stringify({ MediaContainer: { Metadata: [{
+        ratingKey: "42", type: "movie", title: "Example", Media: [{ Part: [{ Stream: [{ streamType: 3, id: 1 }] }] }]
+      }] } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    await assert.rejects(client.waitForSubtitle("42", ["1"], {
+      timeoutMs: 200,
+      intervalMs: 100,
+      now: function () { return now; },
+      delay: function (milliseconds) { now += milliseconds; return Promise.resolve(); }
+    }), function (error) { return error.code === "SUBTITLE_DOWNLOAD_TIMEOUT"; });
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("Plex home falls back when the server does not implement the hubs endpoints", async function () {
@@ -212,7 +332,11 @@ test("Jellyfin metadata and playback URLs use ticks and access token", async fun
     Type: "Movie",
     RunTimeTicks: 600000000,
     UserData: { PlaybackPositionTicks: 300000000 },
-    MediaSources: [{ Id: "source-1" }]
+    MediaSources: [{
+      Id: "source-1",
+      DefaultSubtitleStreamIndex: -1,
+      MediaStreams: [{ Type: "Subtitle", Index: 3, Language: "eng", Codec: "subrip", IsForced: true }]
+    }]
   });
   assert.equal(item.durationMs, 60000);
   assert.equal(item.resumeMs, 30000);
@@ -222,6 +346,83 @@ test("Jellyfin metadata and playback URLs use ticks and access token", async fun
   assert.match(playback.url, /api_key=jf-token/);
   assert.match(playback.url, /StartTimeTicks=300000000/);
   assert.match(playback.directUrl, /static=true/);
+  assert.equal(playback.subtitleDelivery, "off");
+  assert.equal(playback.subtitleStreamIndex, -1);
+});
+
+test("Jellyfin playback negotiation sends explicit -1 for Off", async function () {
+  var originalFetch = global.fetch;
+  var captured = null;
+  global.fetch = async function (url, options) {
+    captured = { url: String(url), options: options };
+    return new Response(JSON.stringify({
+      PlaySessionId: "negotiated-session",
+      MediaSources: [{ Id: "source-1", TranscodingUrl: "/Videos/movie/master.m3u8?PlaySessionId=negotiated-session" }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    var client = new Api.JellyfinClient({ baseUrl: "https://jf.example", token: "token", userId: "user" });
+    var item = client._item({
+      Id: "movie",
+      Name: "Movie",
+      Type: "Movie",
+      MediaSources: [{
+        Id: "source-1",
+        DefaultSubtitleStreamIndex: 4,
+        MediaStreams: [{ Type: "Subtitle", Index: 4, Language: "eng", Codec: "subrip", IsDefault: true }]
+      }]
+    });
+    var playback = await client.createPlayback(item, { startMs: 1234, subtitleSelection: { off: true } });
+    assert.match(captured.url, /Items\/movie\/PlaybackInfo/);
+    assert.match(captured.url, /SubtitleStreamIndex=-1/);
+    assert.equal(captured.options.method, "POST");
+    assert.equal(JSON.parse(captured.options.body).SubtitleStreamIndex, -1);
+    assert.match(playback.url, /api_key=token/);
+    assert.equal(playback.sessionId, "negotiated-session");
+    assert.equal(playback.selectedSubtitle, null);
+    assert.equal(playback.subtitleDelivery, "off");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Jellyfin external text playback returns an authenticated sidecar URL", async function () {
+  var client = new Api.JellyfinClient({ baseUrl: "https://jf.example", token: "token", userId: "user" });
+  var negotiationOptions = null;
+  client.getPlaybackInfo = function (_itemId, options) {
+    negotiationOptions = options;
+    return Promise.resolve({
+      PlaySessionId: "external-session",
+      MediaSources: [{ Id: "source-1", TranscodingUrl: "/Videos/movie/master.m3u8" }]
+    });
+  };
+  var item = client._item({
+    Id: "movie",
+    Name: "Movie",
+    Type: "Movie",
+    MediaSources: [{
+      Id: "source-1",
+      DefaultSubtitleStreamIndex: -1,
+      MediaStreams: [{
+        Type: "Subtitle",
+        Index: 4,
+        Language: "eng",
+        Codec: "subrip",
+        IsExternal: true,
+        DeliveryUrl: "/Videos/movie/source-1/Subtitles/4/Stream.srt?copy=true"
+      }]
+    }]
+  });
+  var playback = await client.createPlayback(item, { subtitleSelection: { id: "4" } });
+  assert.equal(negotiationOptions.subtitleStreamIndex, 4);
+  assert.equal(playback.subtitleDelivery, "external");
+  assert.match(playback.subtitleUrl, /Subtitles\/4\/Stream\.srt\?copy=true&api_key=token/);
+  assert.equal(client.subtitleUrlForTrack("movie", "source-1", {
+    external: true,
+    index: 4,
+    codec: "vtt",
+    deliveryUrl: "https://cdn.example/subtitle.vtt"
+  }), "https://cdn.example/subtitle.vtt");
 });
 
 test("Jellyfin show play-next returns the first unplayed episode in series order", async function () {

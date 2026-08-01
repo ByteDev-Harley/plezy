@@ -1,10 +1,10 @@
 {
   "name": "plezy-samsung-tizen",
-  "version": "2.10.5-samsung.8",
+  "version": "2.10.5-samsung.9",
   "private": true,
   "description": "Plezy TV client for Samsung Tizen televisions",
   "scripts": {
-    "check": "node --check js/identity-store.js && node --check js/api.js && node --check js/navigation.js && node --check js/app.js && node tools/validate-package.js",
+    "check": "node --check js/identity-store.js && node --check js/subtitle-runtime.js && node --check js/api.js && node --check js/navigation.js && node --check js/app.js && node tools/validate-package.js",
     "test": "node --test tests/*.test.js"
   },
   "license": "GPL-3.0"

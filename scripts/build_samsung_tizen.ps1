@@ -29,6 +29,8 @@ Push-Location $project
 try {
   & node --check js/identity-store.js
   if ($LASTEXITCODE -ne 0) { throw "identity-store.js syntax validation failed." }
+  & node --check js/subtitle-runtime.js
+  if ($LASTEXITCODE -ne 0) { throw "subtitle-runtime.js syntax validation failed." }
   & node --check js/api.js
   if ($LASTEXITCODE -ne 0) { throw "api.js syntax validation failed." }
   & node --check js/navigation.js
